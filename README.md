@@ -3,19 +3,20 @@
 [![Build installers](https://github.com/Alister-autonome/AI_Project_tracker/actions/workflows/build-installers.yml/badge.svg)](https://github.com/Alister-autonome/AI_Project_tracker/actions/workflows/build-installers.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Your own job-search assistant, powered by **your Claude account**, running **only on your computer** (macOS or Windows).
+Your own job-search assistant, powered by **your Claude or ChatGPT account** (your choice, switch any time), running **only on your computer** (macOS or Windows). Every feature works the same on both.
 
+- 🔀 **Claude or ChatGPT:** pick one at setup and switch from the sidebar whenever you like.
 - 📊 **Tracker:** every job in one place, with statuses, contacts, follow-up reminders and a pipeline summary.
-- 🤖 **Auto-Apply:** paste job links. Claude fills each application in Chrome from your profile, uploads your resume, then **stops before Submit** so you check and send it yourself.
+- 🤖 **Auto-Apply:** paste job links. your AI fills each application in Chrome from your profile, uploads your resume, then **stops before Submit** so you check and send it yourself.
 - ✉️ **Cover letters & LinkedIn messages:** written in your voice, using only what's true in your profile.
-- 💬 **Ask Claude:** a job-search coach that knows your background (screening questions, fit checks, interview prep).
-- 📈 **Usage:** your real Claude plan limits (5-hour and weekly) plus every request Job Hunter has made.
+- 💬 **Ask AI:** a job-search coach that knows your background (screening questions, fit checks, interview prep).
+- 📈 **Usage:** your plan limits (5-hour and weekly, when your AI reports them) plus the tokens every request used.
 
 ---
 
 ## What you need
 
-- A **Claude Pro or Max** plan ([claude.ai](https://claude.ai)).
+- **Either** a Claude Pro or Max plan ([claude.ai](https://claude.ai)) **or** any ChatGPT plan ([chatgpt.com](https://chatgpt.com)). Job Hunter tells you if your account can't be used and what to do about it.
 - **Google Chrome** (only for Auto-Apply).
 - About 5 minutes the first time.
 
@@ -24,12 +25,9 @@ Your own job-search assistant, powered by **your Claude account**, running **onl
 1. Go to [**Releases**](https://github.com/Alister-autonome/AI_Project_tracker/releases/latest) and download:
    - **Mac:** `JobFiller.pkg`. Right-click → **Open** (it isn't from the App Store, so macOS asks once).
    - **Windows:** `JobFiller-Setup.exe`. If SmartScreen appears, click **More info → Run anyway**.
-2. Open **Job Hunter** from your Desktop. A setup window appears and does the rest:
-   - installs Python, Node.js and Claude Code if they're missing,
-   - asks you to **sign in to Claude once** (your browser opens, sign in, come back),
-   - opens Job Hunter in your browser at `http://localhost:8501`.
+2. Open **Job Hunter** from your Desktop. A setup window installs Python and Node.js if they're missing, then opens Job Hunter in your browser at `http://localhost:8501`.
 3. In the app, follow **Welcome → Step 1 / Step 2**:
-   - Step 1 shows a checklist (Claude installed, signed in, Chrome, Node.js) with a one-click fix for anything missing.
+   - Step 1: **choose Claude or ChatGPT**. A checklist then installs that AI's free helper app (Claude Code or Codex) and signs you in with one click each: your browser opens, you sign in, you come back. It also checks Chrome and Node.js. If your plan doesn't include it (for example Claude's Free plan), it says so and points you to the fix or the other AI.
    - Step 2 takes your name and contact details and your resume (PDF or Word).
 4. Open the **👤 Profile** tab and fill in *Positioning*, *Proof links* and **Don't claim**, so Claude never says you've used a tool you haven't.
 
@@ -53,10 +51,12 @@ Next time, just open Job Hunter from your Desktop. It updates itself automatical
 
 - **Local only.** The app listens on `127.0.0.1`, so other devices on your Wi-Fi can't open it. Usage statistics are off.
 - **Your files stay in the app folder** (`profile.md`, resume, tracker, usage log). They're excluded from Git, so updates never overwrite them.
-- **Claude can't run commands on your computer.** Every request uses Claude Code's `--restricted` mode, with no shell, code or file tools, no MCP servers, and no personal settings or plugins loaded.
-- **Auto-Apply gets a browser and nothing else.** It uses its own Chrome profile (`chrome-profile/`), with Playwright's "run code" tool blocked. It's told to treat web pages as untrusted, never press Enter in forms, never tick consent boxes, never submit, and to stop at logins and CAPTCHAs.
+- **Your AI can't run commands on your computer.**
+  - **Claude:** Claude Code's `--restricted` mode, with no shell, code or file tools, no MCP servers, and no personal settings or plugins loaded.
+  - **ChatGPT:** Codex in a read-only sandbox, with its shell tool, web search, user config and rules switched off. Writing tasks run in an empty temp folder.
+- **Auto-Apply gets a browser and nothing else** (on either AI). It uses its own Chrome profile (`chrome-profile/`), with Playwright's "run code" tool blocked. It's told to treat web pages as untrusted, never press Enter in forms, never tick consent boxes, never submit, and to stop at logins and CAPTCHAs.
 - **Job ads are treated as data.** Pasted text is wrapped and marked as third-party content, so instructions hidden in an ad are ignored.
-- **Lean on your plan.** Requests skip Claude Code's default context, so a cover letter costs a few thousand tokens instead of 100k+.
+- **Lean on your plan.** Claude requests skip Claude Code's default context, so a cover letter costs a few thousand tokens instead of 100k+.
 - **Updates come only from this repository** (`main` branch), and the launcher checks for them each time it starts.
 
 ## For developers
@@ -64,12 +64,12 @@ Next time, just open Job Hunter from your Desktop. It updates itself automatical
 ```
 app.py                  Streamlit app (all UI + Claude CLI bridge)
 .streamlit/config.toml  localhost-only server + theme
-launcher.sh / .bat      installs prerequisites, signs in to Claude, auto-updates, launches
+launcher.sh / .bat      installs Python/Node, auto-updates, launches (AI setup happens in the app)
 installer.iss           Windows installer (Inno Setup)
 .github/workflows/      builds JobFiller.pkg + JobFiller-Setup.exe on every push to main
 profile.example.md      starter profile
 ```
 
-Run from source: `pip install streamlit pandas pypdf python-docx`, then `streamlit run app.py` (needs `claude` signed in).
+Run from source: `pip install streamlit pandas pypdf python-docx`, then `streamlit run app.py` (needs `claude` or `codex` signed in).
 
 MIT licensed.

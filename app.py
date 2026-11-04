@@ -1,9 +1,9 @@
-"""Job Hunter — a local-only job search workspace powered by your own Claude account.
+"""Job Hunter — a local-only job search workspace powered by your own Claude or ChatGPT account.
 
-Runs on http://localhost only. Every Claude call goes through the Claude Code CLI in
---restricted mode with no shell/code tools, so the model can read and write text but
-can't run commands on your computer. Auto-Apply additionally gets a browser (Playwright)
-and nothing else.
+Runs on http://localhost only. Claude requests go through the Claude Code CLI in --restricted mode
+(no shell/code/file tools, no personal settings or MCP servers). ChatGPT requests go through the Codex
+CLI in a read-only sandbox with its shell tool, web search and user config switched off. Auto-Apply
+adds a Playwright browser (with run_code_unsafe blocked) and nothing else, on either AI.
 """
 import io
 import json
@@ -240,35 +240,46 @@ def docx_bytes(text):
 
 
 # ---------------------------------------------------------------------------
-# Claude Code CLI bridge
+# AI bridge: Claude (Claude Code CLI) or ChatGPT (Codex CLI), both locked down
 # ---------------------------------------------------------------------------
-def claude_command():
-    """Returns the argv prefix for the Claude CLI. Avoids running .cmd shims through cmd.exe on Windows."""
-    for name in (["claude.exe", "claude"] if IS_WINDOWS else ["claude"]):
+PROVIDERS = {
+    "claude": {"name": "Claude", "app": "Claude Code", "plans": "a Claude Pro or Max plan (or a Team / Enterprise seat)",
+               "upgrade": "https://claude.ai/upgrade"},
+    "chatgpt": {"name": "ChatGPT", "app": "Codex", "plans": "a ChatGPT plan (Free, Go, Plus, Pro, Business, Edu or Enterprise)",
+                "upgrade": "https://chatgpt.com/pricing"},
+}
+
+
+def find_cli(name, npm_entry):
+    """argv prefix for a CLI. On Windows, runs npm .cmd shims via node directly so cmd.exe never parses our prompts."""
+    if not IS_WINDOWS:
         found = shutil.which(name)
-        if found and not found.lower().endswith((".cmd", ".bat")):
-            return [found]
-    if IS_WINDOWS:
-        shim = shutil.which("claude.cmd")
-        node = shutil.which("node")
-        if shim and node:
-            cli = Path(shim).parent / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js"
-            if cli.exists():
-                return [node, str(cli)]
+        return [found] if found else None
+    found = shutil.which(f"{name}.exe")
+    if found:
+        return [found]
+    shim, node = shutil.which(f"{name}.cmd"), shutil.which("node")
+    if shim and node:
+        entry = Path(shim).parent / "node_modules" / Path(npm_entry)
+        if entry.exists():
+            return [node, str(entry)]
     return None
 
 
-def claude_auth_status():
-    """Free check (no plan usage): is Claude Code signed in, which account and plan."""
-    base = claude_command()
-    if not base:
-        return None
-    try:
-        out = subprocess.run(base + ["auth", "status", "--json"], capture_output=True, text=True,
-                             encoding="utf-8", errors="replace", timeout=30)
-        return json.loads(out.stdout)
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
-        return {"loggedIn": False}
+def claude_command():
+    return find_cli("claude", "@anthropic-ai/claude-code/cli.js")
+
+
+def codex_command():
+    return find_cli("codex", "@openai/codex/bin/codex.js")
+
+
+def provider():
+    return cfg.get("provider") if cfg.get("provider") in PROVIDERS else "claude"
+
+
+def ai_name():
+    return PROVIDERS[provider()]["name"]
 
 
 def chrome_installed():
@@ -292,45 +303,64 @@ def open_terminal(args):
                           "-e", f'tell application "Terminal" to do script "{script}"'])
 
 
+def quiet_run(args, timeout=30):
+    try:
+        out = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
+        return out.returncode, (out.stdout or "") + (out.stderr or "")
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, str(e)
+
+
+def check_account(p):
+    """Free checks (no plan usage): installed, signed in, and whether this account can actually be used."""
+    s = {"provider": p, "installed": False, "signed_in": False, "detail": "", "problem": None, "warning": None,
+         "node": bool(shutil.which("npx")), "chrome": chrome_installed()}
+    if p == "claude":
+        base = claude_command()
+        s["installed"] = base is not None
+        if base:
+            _, out = quiet_run(base + ["auth", "status", "--json"])
+            try:
+                auth = json.loads(out[out.find("{"):])
+            except ValueError:
+                auth = {}
+            s["signed_in"] = bool(auth.get("loggedIn"))
+            plan = str(auth.get("subscriptionType") or "").lower()
+            method = str(auth.get("authMethod") or "").lower()
+            s["detail"] = f"Signed in as {auth.get('email', '')}" + (f" · {plan.title()} plan" if plan else "")
+            if s["signed_in"] and "claude.ai" in method and plan in ("", "free", "none"):
+                s["problem"] = ("Your Claude account is on the Free plan, which doesn't include Claude Code. "
+                                "Upgrade to Pro or Max, or switch to ChatGPT above.")
+            elif s["signed_in"] and ("api" in method or "console" in method):
+                s["warning"] = "You're signed in with an API / Console account, so every request is billed per use."
+    else:
+        base = codex_command()
+        s["installed"] = base is not None
+        if base:
+            code, out = quiet_run(base + ["login", "status"])
+            s["signed_in"] = code == 0 and "not logged in" not in out.lower()
+            s["detail"] = next((l.strip() for l in out.splitlines() if l.strip()), "")[:120]
+            if s["signed_in"] and "api key" in out.lower():
+                s["warning"] = "You're signed in with an OpenAI API key, so every request is billed per use."
+    s["ready"] = s["installed"] and s["signed_in"] and not s["problem"]
+    return s
+
+
 def run_setup_checks():
-    auth = claude_auth_status()
-    st.session_state.setup = {
-        "claude": claude_command() is not None,
-        "auth": auth or {},
-        "signed_in": bool(auth and auth.get("loggedIn")),
-        "node": bool(shutil.which("npx")),
-        "chrome": chrome_installed(),
-    }
+    st.session_state.setup = check_account(provider())
     return st.session_state.setup
 
 
-def setup_checklist():
-    s = st.session_state.get("setup") or run_setup_checks()
-    install_cmd = (["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-Command", "irm https://claude.ai/install.ps1 | iex"]
-                   if IS_WINDOWS else ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"])
-
-    def row(ok, title, detail, fix=None):
-        c1, c2 = st.columns([4, 2])
-        c1.markdown(f"{'✅' if ok else '⬜'} **{title}**  \n<span style='opacity:.7'>{detail}</span>", unsafe_allow_html=True)
-        if not ok and fix:
-            fix(c2)
-
-    row(s["claude"], "1. Claude Code is installed", "The free app that lets Job Hunter use your Claude account.",
-        lambda c: c.button("Install Claude Code", key="fix_install", on_click=open_terminal, args=(install_cmd,), width="stretch"))
-    acct = s["auth"]
-    signed_detail = (f"Signed in as {acct.get('email', '')} · {str(acct.get('subscriptionType', '')).title()} plan"
-                     if s["signed_in"] else "Opens a window, then your browser. Sign in with your Claude Pro or Max account.")
-    row(s["signed_in"], "2. Signed in to Claude", signed_detail,
-        (lambda c: c.button("Sign in to Claude", key="fix_login", type="primary", width="stretch",
-                            on_click=open_terminal, args=(claude_command() + ["auth", "login"],))) if s["claude"] else None)
-    row(s["chrome"], "3. Google Chrome (for Auto-Apply)", "Auto-Apply fills forms in Chrome. Optional if you only write letters.",
-        lambda c: c.link_button("Get Chrome", "https://www.google.com/chrome/", width="stretch"))
-    row(s["node"], "4. Node.js (for Auto-Apply)", "Runs the browser helper. The launcher normally installs it for you.",
-        lambda c: c.link_button("Get Node.js (LTS)", "https://nodejs.org/en/download", width="stretch"))
-    if st.button("🔄 Re-check", key="recheck"):
-        run_setup_checks()
-        st.rerun()
-    return s
+def friendly_error(text):
+    p = PROVIDERS[provider()]
+    low = text.lower()
+    if re.search(r"usage limit|rate.?limit|limit reached|too many requests|\b429\b|quota", low):
+        return f"⏳ You've hit your {p['name']} plan's usage limit. It resets automatically, so try again later (or switch AI in the sidebar)."
+    if re.search(r"not (included|available|supported) (in|on|with|for) your|upgrade|subscription|does(n't| not) have access|not entitled|requires a (paid|pro|plus)|free plan", low):
+        return f"🚫 Your {p['name']} account doesn't support this. Job Hunter needs {p['plans']}. You can switch AI in the sidebar."
+    if re.search(r"log ?in|not authenticated|unauthori[sz]ed|\b401\b|expired|credential|sign.?in", low):
+        return f"🔑 {p['app']} isn't signed in (or the sign-in expired). Use **Sign in** in Setup, then try again."
+    return f"{p['name']} didn't respond properly."
 
 
 def browser_mcp_config():
@@ -339,16 +369,28 @@ def browser_mcp_config():
     return {"mcpServers": {"browser": server}}
 
 
-def run_claude(task, prompt, system, *, browser=False, session_id=None, on_progress=None):
-    """Runs one Claude request through the CLI and records real token usage + plan limits.
+def stream_json(cmd, prompt, cwd):
+    """Runs a CLI with the prompt on stdin and yields parsed JSON events (and raw non-JSON lines)."""
+    proc = subprocess.Popen(cmd, cwd=str(cwd), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+    proc.stdin.write(prompt)
+    proc.stdin.close()
+    for line in proc.stdout:
+        line = line.strip()
+        if line:
+            try:
+                yield json.loads(line), None
+            except json.JSONDecodeError:
+                yield None, line
+    proc.wait()
 
-    Security: --restricted removes Bash/PowerShell/code tools and ignores user settings,
-    --strict-mcp-config loads no MCP servers except the browser (Auto-Apply only),
-    --tools "" removes file tools, and the prompt goes in on stdin (no shell quoting).
-    """
+
+def run_claude(task, prompt, system, *, browser=False, on_progress=None):
+    """Claude Code with --restricted (no shell/code tools, user settings ignored), --strict-mcp-config
+    (no MCP servers except the browser for Auto-Apply) and --tools "" (no file tools)."""
     base = claude_command()
     if not base:
-        return {"ok": False, "text": "Claude Code isn't installed yet. Close the app and run the launcher again."}
+        return {"ok": False, "text": "Claude Code isn't installed yet. Open **Setup** and click **Install**."}
     model = cfg["model"]
     with tempfile.TemporaryDirectory() as tmp:
         sys_file = Path(tmp) / "system.txt"
@@ -361,53 +403,136 @@ def run_claude(task, prompt, system, *, browser=False, session_id=None, on_progr
             # Browser tools only. run_code_unsafe would let a web page get code run on this computer, so it is blocked.
             cmd += ["--mcp-config", str(mcp_file), "--allowedTools", "mcp__browser__*",
                     "--disallowedTools", "mcp__browser__browser_run_code_unsafe"]
-        if session_id:
-            cmd += ["--resume", session_id]
+        text_parts, raw_tail, result = [], [], None
         try:
-            proc = subprocess.Popen(cmd, cwd=str(BASE_DIR), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+            for event, raw in stream_json(cmd, prompt, BASE_DIR):
+                if raw:
+                    raw_tail.append(raw)
+                    continue
+                kind = event.get("type")
+                if kind == "assistant":
+                    for block in event.get("message", {}).get("content", []):
+                        if block.get("type") == "text" and block.get("text"):
+                            text_parts.append(block["text"])
+                        elif block.get("type") == "tool_use" and on_progress:
+                            step = block.get("name", "").replace("mcp__browser__browser_", "").replace("_", " ")
+                            target = block.get("input", {}).get("url") or block.get("input", {}).get("element") or ""
+                            on_progress(f"🖱️ {step} {target}".strip())
+                    if on_progress and text_parts:
+                        on_progress(None, "\n\n".join(text_parts))
+                elif kind == "rate_limit_event":
+                    windows = event.get("rate_limit_info", {}).get("unifiedWindows", {})
+                    if windows:
+                        cfg["plan"] = {"windows": windows, "checked": datetime.now().isoformat(timespec="minutes")}
+                        save_config(cfg)
+                elif kind == "result":
+                    result = event
         except OSError as e:
             return {"ok": False, "text": f"Couldn't start Claude Code: {e}"}
-        proc.stdin.write(prompt)
-        proc.stdin.close()
-
-        text_parts, raw_tail, result = [], [], None
-        for line in proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                raw_tail.append(line)
-                continue
-            kind = event.get("type")
-            if kind == "assistant":
-                for block in event.get("message", {}).get("content", []):
-                    if block.get("type") == "text" and block.get("text"):
-                        text_parts.append(block["text"])
-                    elif block.get("type") == "tool_use" and on_progress:
-                        step = block.get("name", "").replace("mcp__browser__browser_", "").replace("_", " ")
-                        target = block.get("input", {}).get("url") or block.get("input", {}).get("element") or ""
-                        on_progress(f"🖱️ {step} {target}".strip())
-                if on_progress and text_parts:
-                    on_progress(None, "\n\n".join(text_parts))
-            elif kind == "rate_limit_event":
-                windows = event.get("rate_limit_info", {}).get("unifiedWindows", {})
-                if windows:
-                    cfg["plan"] = {"windows": windows, "checked": datetime.now().isoformat(timespec="minutes")}
-                    save_config(cfg)
-            elif kind == "result":
-                result = event
-        proc.wait()
 
     if not result:
         tail = "\n".join(raw_tail[-8:]) or "No response."
-        hint = " Open a terminal, run `claude`, then type `/login`." if re.search(r"log ?in|auth|credential", tail, re.I) else ""
-        return {"ok": False, "text": f"Claude didn't respond properly.{hint}\n\n{tail}"}
+        return {"ok": False, "text": f"{friendly_error(tail)}\n\n```\n{tail}\n```"}
     log_usage(task, model, result.get("usage", {}), result.get("total_cost_usd"), (result.get("duration_ms") or 0) / 1000)
     text = result.get("result") or "\n\n".join(text_parts)
-    return {"ok": not result.get("is_error"), "text": text, "session_id": result.get("session_id")}
+    if result.get("is_error"):
+        return {"ok": False, "text": f"{friendly_error(text)}\n\n```\n{text}\n```"}
+    return {"ok": True, "text": text}
+
+
+def _codex_windows(limits):
+    windows = {}
+    for slot in ("primary", "secondary"):
+        w = limits.get(slot) if isinstance(limits, dict) else None
+        if isinstance(w, dict) and "used_percent" in w:
+            key = "five_hour" if (w.get("window_minutes") or 300) <= 360 else "seven_day"
+            windows[key] = {"utilization": float(w["used_percent"]) / 100, "resetsAt": w.get("resets_at")}
+    return windows
+
+
+def codex_browser_flags():
+    """Same Playwright browser as Claude's Auto-Apply, added for this run only, with run_code_unsafe blocked."""
+    server = browser_mcp_config()["mcpServers"]["browser"]
+    pairs = {
+        "command": json.dumps(server["command"]),
+        "args": json.dumps(server["args"]),
+        "disabled_tools": json.dumps(["browser_run_code_unsafe"]),
+        "startup_timeout_sec": "90",
+        "tool_timeout_sec": "180",
+        "default_tools_approval_mode": '"approve"',
+    }
+    flags = []
+    for key, value in pairs.items():
+        flags += ["-c", f"mcp_servers.browser.{key}={value}"]
+    return flags
+
+
+def run_codex(task, prompt, system, *, browser=False, on_progress=None):
+    """ChatGPT via the Codex CLI: read-only sandbox, shell tool and web search off, approvals never,
+    user config and rules ignored. Text tasks run in an empty temp folder; Auto-Apply also gets the browser."""
+    base = codex_command()
+    if not base:
+        return {"ok": False, "text": "Codex (ChatGPT's app) isn't installed yet. Open **Setup** and click **Install**."}
+    started = datetime.now()
+    with tempfile.TemporaryDirectory() as tmp:
+        instructions = Path(tmp) / "instructions.md"
+        instructions.write_text(system, encoding="utf-8")
+        flags = ["--json", "--sandbox", "read-only", "--ignore-user-config", "--ignore-rules",
+                 "-c", f"model_instructions_file={json.dumps(str(instructions))}",
+                 "-c", "features.shell_tool=false", "-c", 'web_search="disabled"', "-c", 'approval_policy="never"']
+        if browser:
+            flags += codex_browser_flags()
+        for attempt in ("plain", "skip-git"):
+            cmd = base + ["exec"] + (["--skip-git-repo-check"] if attempt == "skip-git" else []) + flags + ["-"]
+            texts, raw_tail, usage, error = [], [], {}, None
+            try:
+                for event, raw in stream_json(cmd, prompt, BASE_DIR if browser else tmp):
+                    if raw:
+                        raw_tail.append(raw)
+                        continue
+                    kind = event.get("type", "")
+                    item = event.get("item") or {}
+                    if kind == "item.completed" and item.get("type") == "agent_message":
+                        texts.append(item.get("text", ""))
+                        if on_progress:
+                            on_progress(None, "\n\n".join(texts))
+                    elif kind == "item.started" and item.get("type") == "mcp_tool_call" and on_progress:
+                        step = str(item.get("tool") or item.get("name") or "").replace("browser_", "").replace("_", " ")
+                        args = item.get("arguments") or {}
+                        target = (args.get("url") or args.get("element") or "") if isinstance(args, dict) else ""
+                        on_progress(f"🖱️ {step} {target}".strip())
+                    elif kind == "turn.completed":
+                        usage = event.get("usage") or {}
+                    elif kind in ("turn.failed", "error"):
+                        err = event.get("error")
+                        error = (err.get("message") if isinstance(err, dict) else err) or event.get("message") or json.dumps(event)
+                    limits = event.get("rate_limits") or (event.get("msg") or {}).get("rate_limits")
+                    windows = _codex_windows(limits) if limits else {}
+                    if windows:
+                        cfg["plan_chatgpt"] = {"windows": windows, "checked": datetime.now().isoformat(timespec="minutes")}
+                        save_config(cfg)
+            except OSError as e:
+                return {"ok": False, "text": f"Couldn't start Codex: {e}"}
+            joined_tail = "\n".join(raw_tail[-8:])
+            if attempt == "plain" and not texts and "skip-git-repo-check" in (joined_tail + str(error)):
+                continue  # older/newer Codex builds want this flag outside a git repo
+            break
+
+    if usage:
+        cached = int(usage.get("cached_input_tokens", 0))
+        log_usage(task, "chatgpt", {"input_tokens": int(usage.get("input_tokens", 0)) - cached,
+                                    "output_tokens": int(usage.get("output_tokens", 0)) + int(usage.get("reasoning_output_tokens", 0)),
+                                    "cache_read_input_tokens": cached}, 0, (datetime.now() - started).total_seconds())
+    if texts and not error:
+        return {"ok": True, "text": texts[-1]}
+    detail = str(error or joined_tail or "No response.")
+    return {"ok": False, "text": f"{friendly_error(detail)}\n\n```\n{detail[-1500:]}\n```"}
+
+
+def run_ai(task, prompt, system, *, browser=False, on_progress=None):
+    if provider() == "chatgpt":
+        return run_codex(task, prompt, system, browser=browser, on_progress=on_progress)
+    return run_claude(task, prompt, system, browser=browser, on_progress=on_progress)
 
 
 def with_profile(rules):
@@ -440,19 +565,67 @@ def fmt_reset(ts):
 
 
 def plan_usage_panel(compact=False):
-    windows = cfg.get("plan", {}).get("windows", {})
+    plan = cfg.get("plan" if provider() == "claude" else "plan_chatgpt", {})
+    windows = plan.get("windows", {})
     if not windows:
-        st.caption("Plan usage appears after your first Claude request (or press **Check now**).")
+        st.caption("Plan limits appear after your first request (or press **Check now**)." if provider() == "claude" else
+                   "ChatGPT doesn't always share plan limits with apps. Every request's token use is still tracked in **Usage**.")
         return
-    labels = {"five_hour": "5-hour limit", "seven_day": "Weekly limit"}
-    for key, label in labels.items():
+    for key, label in {"five_hour": "5-hour limit", "seven_day": "Weekly limit"}.items():
         w = windows.get(key)
-        if not w:
-            continue
-        pct = float(w.get("utilization", 0))
-        st.progress(min(pct, 1.0), text=f"**{label}:** {pct:.0%} used · resets {fmt_reset(w.get('resetsAt'))}")
+        if w:
+            pct = float(w.get("utilization", 0))
+            reset = fmt_reset(w.get("resetsAt"))
+            st.progress(min(pct, 1.0), text=f"**{label}:** {pct:.0%} used" + (f" · resets {reset}" if reset else ""))
     if not compact:
-        st.caption(f"Last checked {cfg['plan'].get('checked', '').replace('T', ' ')}")
+        st.caption(f"Last checked {plan.get('checked', '').replace('T', ' ')}")
+
+
+def setup_checklist():
+    """Step-by-step setup for the chosen AI, with a one-click fix for each missing piece."""
+    names = list(PROVIDERS)
+    pick = st.radio("Which AI do you want to use?", names, index=names.index(provider()), horizontal=True,
+                    format_func=lambda k: f"{PROVIDERS[k]['name']} — needs {PROVIDERS[k]['plans']}", key="setup_provider")
+    if pick != provider():
+        cfg["provider"] = pick
+        save_config(cfg)
+        run_setup_checks()
+        st.rerun()
+    s = st.session_state.get("setup") or run_setup_checks()
+    p = PROVIDERS[provider()]
+    if provider() == "claude":
+        install_cmd = (["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-Command", "irm https://claude.ai/install.ps1 | iex"]
+                       if IS_WINDOWS else ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"])
+        login_cmd = (claude_command() or ["claude"]) + ["auth", "login"]
+    else:
+        install_cmd = ["npm", "install", "-g", "@openai/codex"]
+        login_cmd = (codex_command() or ["codex"]) + ["login"]
+
+    def row(ok, title, detail, fix=None):
+        c1, c2 = st.columns([4, 2])
+        c1.markdown(f"{'✅' if ok else '⬜'} **{title}**  \n<span style='opacity:.7'>{detail}</span>", unsafe_allow_html=True)
+        if not ok and fix:
+            fix(c2)
+
+    row(s["installed"], f"1. {p['app']} is installed", f"The free app that lets Job Hunter use your {p['name']} account.",
+        lambda c: c.button(f"Install {p['app']}", key="fix_install", on_click=open_terminal, args=(install_cmd,), width="stretch"))
+    row(s["signed_in"], f"2. Signed in to {p['name']}",
+        s["detail"] if s["signed_in"] else f"Opens a window, then your browser. Sign in with {p['plans']}.",
+        (lambda c: c.button(f"Sign in to {p['name']}", key="fix_login", type="primary", width="stretch",
+                            on_click=open_terminal, args=(login_cmd,))) if s["installed"] else None)
+    if s["problem"]:
+        st.error(s["problem"])
+        st.link_button(f"See {p['name']} plans", p["upgrade"])
+    elif s["warning"]:
+        st.info(s["warning"])
+    row(s["chrome"], "3. Google Chrome (for Auto-Apply)", "Auto-Apply fills forms in Chrome. Optional if you only write letters.",
+        lambda c: c.link_button("Get Chrome", "https://www.google.com/chrome/", width="stretch"))
+    row(s["node"], "4. Node.js", "Runs the browser helper (and installs Codex). The launcher normally installs it for you.",
+        lambda c: c.link_button("Get Node.js (LTS)", "https://nodejs.org/en/download", width="stretch"))
+    if st.button("🔄 Re-check", key="recheck"):
+        run_setup_checks()
+        st.rerun()
+    return s
 
 
 # ---------------------------------------------------------------------------
@@ -462,27 +635,38 @@ cfg = load_config()
 st.session_state.setdefault("show_onboarding", not cfg.get("onboarding_complete"))
 st.session_state.setdefault("tip", random.choice(FUN_FACTS))
 st.session_state.setdefault("chat", [])
-st.session_state.setdefault("chat_session", None)
 st.session_state.setdefault("editor_version", 0)
-setup = st.session_state.get("setup") or run_setup_checks()
+setup = st.session_state.get("setup")
+if not setup or setup.get("provider") != provider():
+    setup = run_setup_checks()
 
 # ---------------------------------------------------------------------------
 # Sidebar: plan usage, resume status, settings
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("### 🎯 Job Hunter")
-    st.caption("Runs only on this computer · your files never leave it except when Claude reads them")
-    if setup["signed_in"]:
-        acct = setup["auth"]
-        st.markdown(f"**Claude:** ✅ {str(acct.get('subscriptionType', '')).title()} plan  \n"
-                    f"<span style='opacity:.7;font-size:.85rem'>{acct.get('email', '')}</span>", unsafe_allow_html=True)
+    st.caption("Runs only on this computer · your files only leave it when your AI reads them")
+    names = list(PROVIDERS)
+    switch = st.segmented_control("Your AI", names, default=provider(), format_func=lambda k: PROVIDERS[k]["name"],
+                                  key="ai_switch", help="Switch any time. Your tracker and profile stay the same.")
+    if switch and switch != provider():
+        cfg["provider"] = switch
+        save_config(cfg)
+        run_setup_checks()
+        st.rerun()
+    if setup["ready"]:
+        st.markdown(f"✅ <span style='opacity:.8;font-size:.85rem'>{setup['detail']}</span>", unsafe_allow_html=True)
+        if setup["warning"]:
+            st.caption("⚠️ " + setup["warning"])
+    elif setup["problem"]:
+        st.error(setup["problem"])
     else:
-        st.error("Claude isn't connected yet. Follow **Setup** on the main page.")
-    st.markdown("**Claude plan usage**")
+        st.error(f"{ai_name()} isn't connected yet. Follow **Setup** on the main page.")
+    st.markdown(f"**{ai_name()} plan usage**")
     plan_usage_panel(compact=True)
     if st.button("🔄 Check now", width="stretch", help="Sends a tiny request to refresh your plan usage"):
         with st.spinner("Checking…"):
-            res = run_claude("Usage check", "Reply with OK.", "Reply with OK.")
+            res = run_ai("Usage check", "Reply with OK.", "Reply with OK.")
         (st.toast if res["ok"] else st.error)("Usage updated" if res["ok"] else res["text"])
         st.rerun()
 
@@ -493,7 +677,8 @@ with st.sidebar:
     st.markdown(f"**Profile:** {'✅ ready' if has_profile else '⚠️ still the example — edit it in Profile'}")
 
     with st.expander("⚙️ Settings"):
-        new_model = st.radio("Claude model", list(MODELS), format_func=MODELS.get, index=list(MODELS).index(cfg["model"]))
+        new_model = (st.radio("Claude model", list(MODELS), format_func=MODELS.get, index=list(MODELS).index(cfg["model"]))
+                     if provider() == "claude" else cfg["model"])
         new_limit = st.number_input("Max auto-apply runs per day", 1, 100, int(cfg.get("daily_apply_limit", 20)))
         if (new_model, new_limit) != (cfg["model"], cfg.get("daily_apply_limit")):
             cfg["model"], cfg["daily_apply_limit"] = new_model, int(new_limit)
@@ -526,15 +711,15 @@ k[5].metric("🗂️ Total", len(tracker))
 # ---------------------------------------------------------------------------
 # First-run setup
 # ---------------------------------------------------------------------------
-if not setup["signed_in"] and not st.session_state.show_onboarding:
+if not setup["ready"] and not st.session_state.show_onboarding:
     with st.container(border=True):
-        st.subheader("🔌 Connect Claude to finish setup")
+        st.subheader("🔌 Connect your AI to finish setup")
         setup_checklist()
 
 if st.session_state.show_onboarding:
     with st.container(border=True):
         st.subheader("🎉 Welcome! Two quick steps")
-        st.markdown("#### Step 1 · Connect your Claude account")
+        st.markdown("#### Step 1 · Choose your AI and connect it")
         setup_checklist()
         st.markdown("#### Step 2 · About you")
         st.write("Tell Job Hunter who you are and drop in your resume. Everything stays in this folder on your computer.")
@@ -601,7 +786,7 @@ if st.session_state.show_onboarding:
 # Tabs — Tracker first so it's the first thing you see
 # ---------------------------------------------------------------------------
 tab_tracker, tab_apply, tab_write, tab_chat, tab_usage, tab_profile = st.tabs(
-    ["📊 Tracker", "🤖 Auto-Apply", "✉️ Cover Letter & Outreach", "💬 Ask Claude", "📈 Usage", "👤 Profile"]
+    ["📊 Tracker", "🤖 Auto-Apply", "✉️ Cover Letter & Outreach", "💬 Ask AI", "📈 Usage", "👤 Profile"]
 )
 
 with tab_tracker:
@@ -680,7 +865,7 @@ with tab_tracker:
 with tab_apply:
     st.subheader("🤖 Auto-Apply — fills the form, you press Submit")
     st.write(
-        "Paste job links. Claude opens each one in a Chrome window, fills the application from your profile, "
+        "Paste job links. Your AI opens each one in a Chrome window, fills the application from your profile, "
         "uploads your resume and **stops before Submit**. Check the tab, finish anything it lists, then submit yourself."
     )
     runs_today = int((load_usage().query("Task == 'Auto-Apply'")["Time"].astype(str).str.startswith(date.today().isoformat())).sum()) if USAGE_PATH.exists() else 0
@@ -716,7 +901,7 @@ with tab_apply:
                     f"Resume file to upload: {resume}\n"
                     + (f"\nCover letter to paste if there's a cover letter box:\n{cover_text}\n" if use_cover and cover_text else "")
                 )
-                res = run_claude("Auto-Apply", prompt, with_profile(FILL_RULES), browser=True, on_progress=progress)
+                res = run_ai("Auto-Apply", prompt, with_profile(FILL_RULES), browser=True, on_progress=progress)
                 runs_today += 1
                 meta = re.search(r"TRACKER_META:\s*Company=([^|\n]*)\|\s*Role=([^|\n]*)\|\s*Contact=([^|\n]*)\|\s*Notes=([^\n]*)", res["text"])
                 company, role, contact, notes = (m.strip() for m in meta.groups()) if meta else ("", "", "", "")
@@ -730,7 +915,7 @@ with tab_apply:
 
 with tab_write:
     st.subheader("✉️ Cover letter & outreach")
-    st.caption("Paste the job ad. Claude writes in your voice using only what's in your profile, and never claims what you've listed under *Don't claim*.")
+    st.caption(f"Paste the job ad. {ai_name()} writes in your voice using only what's in your profile, and never claims what you've listed under *Don't claim*.")
     with st.form("writer"):
         w1, w2, w3 = st.columns(3)
         w_company = w1.text_input("Company")
@@ -751,8 +936,8 @@ with tab_write:
             task, system, ask = "Outreach", with_profile(WRITING_RULES + "\n\n" + OUTREACH_RULES), job
         else:
             task, system, ask = "Fit check", with_profile(COACH_RULES), f"Give me a quick fit check for this job.\n{job}"
-        with st.spinner("Claude is writing…"):
-            res = run_claude(task, ask, system)
+        with st.spinner(f"{ai_name()} is writing…"):
+            res = run_ai(task, ask, system)
         st.session_state.writer_out = (task, res, w_company, w_role, w_contact)
 
     if "writer_out" in st.session_state:
@@ -774,10 +959,10 @@ with tab_write:
                     st.code(res["text"], language=None)
 
 with tab_chat:
-    st.subheader("💬 Ask Claude")
+    st.subheader(f"💬 Ask {ai_name()}")
     st.caption("Your job-search coach. It knows your profile. Paste screening questions, job ads, or ask for interview prep.")
     if st.button("🧹 New conversation", disabled=not st.session_state.chat):
-        st.session_state.chat, st.session_state.chat_session = [], None
+        st.session_state.chat = []
         st.rerun()
     for msg in st.session_state.chat:
         st.chat_message(msg["role"]).markdown(msg["content"])
@@ -788,12 +973,11 @@ with tab_chat:
         with st.chat_message("assistant"):
             placeholder = st.empty()
             placeholder.markdown("_Thinking…_")
-            res = run_claude("Ask Claude", question, with_profile(COACH_RULES + "\n\n" + WRITING_RULES),
-                             session_id=st.session_state.chat_session,
-                             on_progress=lambda _s, t=None: placeholder.markdown(t) if t else None)
+            history = "\n\n".join(f"{m['role'].upper()}: {m['content']}" for m in st.session_state.chat[-9:-1])
+            ask = f"Conversation so far:\n{history}\n\nUSER'S NEW MESSAGE: {question}" if history else question
+            res = run_ai("Ask AI", ask, with_profile(COACH_RULES + "\n\n" + WRITING_RULES),
+                         on_progress=lambda _s, t=None: placeholder.markdown(t) if t else None)
             placeholder.markdown(res["text"])
-        if res.get("session_id"):
-            st.session_state.chat_session = res["session_id"]
         st.session_state.chat.append({"role": "assistant", "content": res["text"]})
 
 with tab_usage:
@@ -801,13 +985,13 @@ with tab_usage:
     u1, u2 = st.columns([2, 3])
     with u1:
         with st.container(border=True):
-            st.markdown("**Your Claude plan**")
+            st.markdown(f"**Your {ai_name()} plan**")
             plan_usage_panel()
-            st.caption("These are the same limits Claude shows in Settings → Usage. When a bar fills up, Claude pauses until it resets.")
+            st.caption("When a limit fills up, your AI pauses until it resets. Switch AI in the sidebar to keep going.")
     usage = load_usage()
     with u2:
         if usage.empty:
-            st.info("No Claude requests yet.")
+            st.info("No AI requests yet.")
         else:
             usage["Day"] = usage["Time"].astype(str).str[:10]
             usage["Tokens"] = usage["Input tokens"] + usage["Output tokens"] + usage["Cache tokens"]
@@ -820,7 +1004,7 @@ with tab_usage:
     if not usage.empty:
         st.markdown("**Recent requests**")
         st.dataframe(usage[USAGE_COLUMNS].iloc[::-1].head(50), hide_index=True, width="stretch")
-        st.caption("Cost is the API-list-price equivalent. On a Pro/Max plan you aren't charged it; it shows how heavy each request was.")
+        st.caption("Cost is Claude's API-list-price equivalent (ChatGPT doesn't report one). On a subscription you aren't charged it; it shows how heavy each request was.")
 
 with tab_profile:
     st.subheader("👤 Your profile")
@@ -847,7 +1031,7 @@ with tab_profile:
             st.markdown("**Tips for a great profile**")
             st.markdown(
                 "- **Positioning:** one sentence that leads every letter.\n"
-                "- **Proof links:** portfolio, case studies, articles. Claude links them as evidence.\n"
+                "- **Proof links:** portfolio, case studies, articles. Your AI links them as evidence.\n"
                 "- **Don't claim:** list tools you *haven't* used so they never end up in an application.\n"
                 "- **Roles to avoid:** so the fit check can warn you.\n"
                 "- Keep salary and notice period current. Auto-Apply uses them."

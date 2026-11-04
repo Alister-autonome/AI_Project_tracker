@@ -80,28 +80,9 @@ if "!PYTHON_CMD!"=="" (
     )
 )
 
-:: 5. Install Claude Code CLI if missing (official installer, npm as fallback)
-call claude --version >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo [Setup] Installing Claude Code...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://claude.ai/install.ps1 | iex"
-    set "PATH=%USERPROFILE%\.local\bin;%PATH%"
-    call claude --version >nul 2>&1 || call npm install -g @anthropic-ai/claude-code
-)
+:: 5. Your AI (Claude or ChatGPT) is chosen, installed and signed in from the app's Setup screen.
 
-:: 6. Connect the Claude account once (opens the browser to sign in)
-call claude auth status 2>nul | findstr /R /C:"loggedIn.: true" >nul
-if !ERRORLEVEL! NEQ 0 (
-    echo.
-    echo ==========================================
-    echo  One-time step: connect your Claude account
-    echo  A browser window will open. Sign in with your Claude Pro or Max account,
-    echo  then come back here.
-    echo ==========================================
-    call claude auth login
-)
-
-:: 7. Build Python venv using real Python binary and launch Streamlit directly from venv
+:: 6. Build Python venv using real Python binary and launch Streamlit directly from venv
 if not exist "venv\Scripts\python.exe" (
     echo [Setup] Creating local Python virtual environment...
     !PYTHON_CMD! -m venv venv

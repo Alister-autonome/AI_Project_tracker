@@ -46,21 +46,7 @@ if ! command -v node &> /dev/null || ! command -v python3 &> /dev/null; then
     brew install node python
 fi
 
-if ! command -v claude &> /dev/null; then
-    echo "Installing Claude Code..."
-    curl -fsSL https://claude.ai/install.sh | bash || npm install -g @anthropic-ai/claude-code
-    export PATH="$HOME/.local/bin:$PATH"
-fi
-
-if ! claude auth status 2>/dev/null | grep -q '"loggedIn": true'; then
-    echo ""
-    echo "=========================================="
-    echo " 🔑 One-time step: connect your Claude account"
-    echo " A browser window will open. Sign in with your Claude Pro or Max account,"
-    echo " then come back here."
-    echo "=========================================="
-    claude auth login
-fi
+# Your AI (Claude or ChatGPT) is chosen, installed and signed in from the app's Setup screen.
 
 if [ ! -d "venv" ]; then
     echo "Creating local Python environment..."
