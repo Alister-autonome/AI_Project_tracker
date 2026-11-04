@@ -1,6 +1,6 @@
 # 🚀 JobFiller: Autonome + Gadgets Hub + Application Tracker
 
-[![Build macOS PKG Installer](https://github.com/YOUR_GITHUB_USERNAME/mac-job-filler/actions/workflows/build-mac-pkg.yml/badge.svg)](https://github.com/YOUR_GITHUB_USERNAME/mac-job-filler/actions/workflows/build-mac-pkg.yml)
+[![Build macOS PKG Installer](https://github.com/Alister-autonome/AI_Project_tracker/actions/workflows/build-mac-pkg.yml/badge.svg)](https://github.com/Alister-autonome/AI_Project_tracker/actions/workflows/build-mac-pkg.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/Platform-macOS-lightgrey.svg)](https://apple.com/macos)
 [![Powered by Claude Code](https://img.shields.io/badge/Engine-Claude%20Code%20CLI%20%2B%20Playwright%20MCP-purple.svg)](https://anthropic.com)
@@ -23,7 +23,7 @@ Paired with a built-in **📊 CRM-style Application Tracker** and a modular **�
 
 ## 📥 Installation
 
-1. Navigate to the [**Releases**](https://github.com/YOUR_GITHUB_USERNAME/mac-job-filler/releases/latest) page of this repository.
+1. Navigate to the [**Releases**](https://github.com/Alister-autonome/AI_Project_tracker/releases/latest) page of this repository.
 2. Download the latest **`JobFiller.pkg`** installer.
 3. On your Mac, right-click `JobFiller.pkg` -> click **Open** (to bypass Gatekeeper for open-source unsigned packages) and follow the installer prompts.
 
