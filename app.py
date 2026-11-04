@@ -27,7 +27,7 @@ def get_claude_binary():
 
 CLAUDE_BIN = get_claude_binary()
 
-# Default to Sonnet 5.5 alias to preserve user's Claude compute quota
+# Default to Sonnet 5.5 to preserve user's Claude compute quota
 SONNET_MODEL_OPTIONS = [
     "sonnet",
     "claude-sonnet-5-5",
@@ -40,7 +40,8 @@ EXAMPLE_PROFILE_PATH = BASE_DIR / "profile.example.md"
 RESUME_PDF_PATH = BASE_DIR / "resume.pdf"
 RESUME_DOCX_PATH = BASE_DIR / "resume.docx"
 COVER_LETTER_PATH = BASE_DIR / "cover_letter.md"
-GADGETS_CONFIG_PATH = BASE_DIR / "gadgets_config.json"
+USER_CONFIG_PATH = BASE_DIR / "user_config.json"
+LEGACY_CONFIG_PATH = BASE_DIR / "gadgets_config.json"
 HISTORY_PATH = BASE_DIR / "applications_history.csv"
 
 STATUS_OPTIONS = [
@@ -91,7 +92,7 @@ FUN_QUOTES_AND_PUNS = [
     "😄 **Career Pun:** My friend got a job at the bakery because he really *kneaded* the dough. Let's go get yours!"
 ]
 
-st.set_page_config(page_title="Autonome & Job Tracker Suite", layout="wide")
+st.set_page_config(page_title="Autonome Job Filler", layout="wide")
 
 # Seed profile.md on first run if missing
 if not PROFILE_PATH.exists() and EXAMPLE_PROFILE_PATH.exists():
@@ -209,17 +210,14 @@ def append_application_to_tracker(company, role, status, url, notes=""):
     df = pd.concat([new_row, df], ignore_index=True)
     save_tracker_df(df)
 
-def load_gadgets_config():
+def load_user_config():
     today_str = datetime.now().strftime("%Y-%m-%d")
     month_str = datetime.now().strftime("%Y-%m")
     default_cfg = {
         "user_name": "",
         "onboarding_complete": False,
         "claude_model": "sonnet",
-        "notion_enabled": False,
-        "notion_token": "",
-        "notion_database_id": "",
-        "pdf_auto_cover_letter": False,
+        "auto_cover_letter": False,
         "daily_application_limit": 25,
         "monthly_application_limit": 250,
         "usage_stats": {
@@ -232,9 +230,10 @@ def load_gadgets_config():
             "estimated_savings_usd": 0.0
         }
     }
-    if GADGETS_CONFIG_PATH.exists():
+    cfg_to_read = USER_CONFIG_PATH if USER_CONFIG_PATH.exists() else (LEGACY_CONFIG_PATH if LEGACY_CONFIG_PATH.exists() else None)
+    if cfg_to_read and cfg_to_read.exists():
         try:
-            saved = json.loads(GADGETS_CONFIG_PATH.read_text(encoding="utf-8"))
+            saved = json.loads(cfg_to_read.read_text(encoding="utf-8"))
             default_cfg.update(saved)
             if "usage_stats" not in saved:
                 default_cfg["usage_stats"] = {
@@ -250,8 +249,8 @@ def load_gadgets_config():
             pass
     return default_cfg
 
-def save_gadgets_config(cfg):
-    GADGETS_CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+def save_user_config(cfg):
+    USER_CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
 def get_usage_metrics(cfg):
     """Calculates active usage, rollover checks, remaining applications, and Sonnet compute savings."""
@@ -271,7 +270,7 @@ def get_usage_metrics(cfg):
         changed = True
 
     if changed:
-        save_gadgets_config(cfg)
+        save_user_config(cfg)
 
     daily_limit = int(cfg.get("daily_application_limit", 25))
     monthly_limit = int(cfg.get("monthly_application_limit", 250))
@@ -296,17 +295,16 @@ def get_usage_metrics(cfg):
 
 def record_application_run(cfg, tokens_est=3500):
     """Increments run counters and computes estimated savings from locking to Sonnet 5.5 vs Opus."""
-    get_usage_metrics(cfg)  # Ensure date rollover is verified first
+    get_usage_metrics(cfg)  # Verify date rollover
     stats = cfg.setdefault("usage_stats", {})
     stats["today_runs"] = stats.get("today_runs", 0) + 1
     stats["month_runs"] = stats.get("month_runs", 0) + 1
     stats["total_runs"] = stats.get("total_runs", 0) + 1
     stats["total_estimated_tokens"] = stats.get("total_estimated_tokens", 0) + tokens_est
-    # Sonnet 5.5 ($3/MTok input) vs Opus ($15/MTok input) saves ~$0.042 per typical 3.5k prompt interaction
     savings_increment = round((tokens_est / 1_000_000.0) * 12.0, 4)
     stats["estimated_savings_usd"] = round(stats.get("estimated_savings_usd", 0.0) + savings_increment, 3)
     cfg["usage_stats"] = stats
-    save_gadgets_config(cfg)
+    save_user_config(cfg)
 
 def get_git_version():
     try:
@@ -321,52 +319,24 @@ def get_git_version():
     except Exception:
         return "local"
 
-def push_to_notion(cfg, company, role, job_url, status_note="Ready to Review"):
-    if not (cfg.get("notion_enabled") and cfg.get("notion_token") and cfg.get("notion_database_id")):
-        return False, "Notion Gadget not configured or disabled."
-    try:
-        title_text = f"{company} — {role}" if company and company != "Unknown Company" else job_url
-        payload = json.dumps({
-            "parent": {"database_id": cfg["notion_database_id"]},
-            "properties": {
-                "Name": {"title": [{"text": {"content": title_text[:100]}}]},
-                "URL": {"url": job_url},
-                "Status": {"rich_text": [{"text": {"content": status_note}}]}
-            }
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            "https://api.notion.com/v1/pages",
-            data=payload,
-            headers={
-                "Authorization": f"Bearer {cfg['notion_token']}",
-                "Content-Type": "application/json",
-                "Notion-Version": "2022-06-28"
-            },
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status in (200, 201), "Synced to Notion database!"
-    except Exception as e:
-        return False, f"Notion error: {e}"
-
-gadgets_cfg = load_gadgets_config()
-usage_data = get_usage_metrics(gadgets_cfg)
+user_cfg = load_user_config()
+usage_data = get_usage_metrics(user_cfg)
 tracker_df = load_tracker_df()
 active_resume = get_active_resume_path()
-active_model = gadgets_cfg.get("claude_model", "sonnet")
+active_model = user_cfg.get("claude_model", "sonnet")
 
 if "current_quote" not in st.session_state:
     st.session_state.current_quote = random.choice(FUN_QUOTES_AND_PUNS)
 
 if "show_onboarding" not in st.session_state:
-    st.session_state.show_onboarding = not gadgets_cfg.get("onboarding_complete", False)
+    st.session_state.show_onboarding = not user_cfg.get("onboarding_complete", False)
 
 # Sidebar: System Updates, Inbuilt Usage Tracker, Compute Saver, Security Shield & Stats
 with st.sidebar:
-    st.header("⚙️ Autonome Suite")
+    st.header("⚙️ Autonome Job Filler")
     os_badge = "🪟 Windows" if IS_WINDOWS else "🍎 macOS"
     st.caption(f"Platform: **{os_badge}** | Build: `{get_git_version()}`")
-    st.success(f"⚡ **Compute Saver Active:** Locked to **Sonnet 5.5** (`{active_model}`)")
+    st.success(f"⚡ **Compute Saver:** Locked to **Sonnet 5.5** (`{active_model}`)")
 
     # -------------------------------------------------------------
     # INBUILT USAGE TRACKER (Remaining Quota & Daily Progress Bar)
@@ -394,15 +364,15 @@ with st.sidebar:
         new_daily_limit = st.number_input("Daily Application Limit:", min_value=1, max_value=500, value=usage_data["daily_limit"])
         new_monthly_limit = st.number_input("Monthly Application Limit:", min_value=10, max_value=5000, value=usage_data["monthly_limit"])
         if st.button("💾 Save Usage Limits"):
-            gadgets_cfg["daily_application_limit"] = int(new_daily_limit)
-            gadgets_cfg["monthly_application_limit"] = int(new_monthly_limit)
-            save_gadgets_config(gadgets_cfg)
+            user_cfg["daily_application_limit"] = int(new_daily_limit)
+            user_cfg["monthly_application_limit"] = int(new_monthly_limit)
+            save_user_config(user_cfg)
             st.toast("Usage limits updated!")
             st.rerun()
         if st.button("🔄 Reset Today's Counter"):
-            stats = gadgets_cfg.setdefault("usage_stats", {})
+            stats = user_cfg.setdefault("usage_stats", {})
             stats["today_runs"] = 0
-            save_gadgets_config(gadgets_cfg)
+            save_user_config(user_cfg)
             st.toast("Today's application usage reset to 0.")
             st.rerun()
 
@@ -420,16 +390,16 @@ with st.sidebar:
         """
     )
 
-    with st.expander("🔧 Change Sonnet 5.5 Model ID"):
+    with st.expander("🔧 Sonnet 5.5 Model Flag"):
         selected_model = st.selectbox(
-            "Sonnet 5.5 CLI Flag:",
+            "Claude CLI Model:",
             options=SONNET_MODEL_OPTIONS,
             index=SONNET_MODEL_OPTIONS.index(active_model) if active_model in SONNET_MODEL_OPTIONS else 0,
-            help="Uses Sonnet 5.5 instead of Opus to conserve your Claude compute quota."
+            help="Locks Claude CLI to Sonnet 5.5 to save your compute quota."
         )
         if selected_model != active_model:
-            gadgets_cfg["claude_model"] = selected_model
-            save_gadgets_config(gadgets_cfg)
+            user_cfg["claude_model"] = selected_model
+            save_user_config(user_cfg)
             st.rerun()
 
     if st.button("🔄 Check & Pull GitHub Update"):
@@ -454,16 +424,14 @@ with st.sidebar:
     st.write(f"🎤 **Interviewing:** {len(tracker_df[tracker_df['Status'] == 'Interviewing'])}")
 
     st.divider()
-    st.subheader("🧰 Active Gadgets")
     resume_label = f"✅ {active_resume.name}" if active_resume else "❌ Missing"
-    st.write(f"📄 **Resume File:** {resume_label}")
-    st.write(f"📝 **Auto Cover Letter:** {'🟢 ON' if gadgets_cfg.get('pdf_auto_cover_letter') else '⚪ OFF'}")
-    st.write(f"📓 **Notion Sync:** {'🟢 ON' if gadgets_cfg.get('notion_enabled') else '⚪ OFF'}")
+    st.write(f"📄 **Active Resume:** {resume_label}")
+    st.write(f"📝 **Auto Cover Letter:** {'🟢 ON' if user_cfg.get('auto_cover_letter') else '⚪ OFF'}")
 
 # =========================================================
 # PERSONALIZED GREETING BANNER ("Hi [Name]!" + Pun / Fact)
 # =========================================================
-display_name = gadgets_cfg.get("user_name", "").strip() or "Friend"
+display_name = user_cfg.get("user_name", "").strip() or "Friend"
 greet_col1, greet_col2 = st.columns([5, 1])
 with greet_col1:
     st.title(f"👋 Hi {display_name}! Ready to land your next role?")
@@ -489,7 +457,7 @@ if st.session_state.show_onboarding:
         ob_col1, ob_col2 = st.columns(2)
         with ob_col1:
             st.markdown("#### 1. Your Basic Details")
-            ob_name = st.text_input("What's your first name (or preferred name)?", value=gadgets_cfg.get("user_name", ""), placeholder="e.g. Sarah")
+            ob_name = st.text_input("What's your first name (or preferred name)?", value=user_cfg.get("user_name", ""), placeholder="e.g. Sarah")
             ob_full_name = st.text_input("Full Legal Name (for job forms)", value=ob_name, placeholder="e.g. Sarah Jenkins")
             ob_email = st.text_input("Email Address", placeholder="sarah@example.com")
             ob_phone = st.text_input("Phone Number", placeholder="555-123-4567")
@@ -523,9 +491,9 @@ if st.session_state.show_onboarding:
         with btn_col1:
             if st.button("🚀 Save Profile & Finish Onboarding", type="primary"):
                 chosen_name = ob_name.strip() or (ob_full_name.strip().split(" ")[0] if ob_full_name.strip() else "Friend")
-                gadgets_cfg["user_name"] = chosen_name
-                gadgets_cfg["onboarding_complete"] = True
-                save_gadgets_config(gadgets_cfg)
+                user_cfg["user_name"] = chosen_name
+                user_cfg["onboarding_complete"] = True
+                save_user_config(user_cfg)
 
                 compiled_profile = f"""# Candidate Information
 - Preferred Name: {chosen_name}
@@ -543,7 +511,7 @@ if st.session_state.show_onboarding:
 - Gender / Ethnicity / Veteran / Disability: Prefer not to say
 
 # Extracted Resume Content & Work History
-{extracted_resume_preview if extracted_resume_preview else "Paste your work history or upload a PDF/Word resume in the Gadgets tab."}
+{extracted_resume_preview if extracted_resume_preview else "Paste your work history or upload a PDF/Word resume in the Resume Gadget tab."}
 
 # Standard Screening Answers
 - "Why do you want to work here?": Write a concise 2-3 sentence answer connecting my background and resume experience to the specific role description on the page.
@@ -560,9 +528,9 @@ if st.session_state.show_onboarding:
                 else:
                     with st.spinner("Sonnet 5.5 is structuring your resume & answers into profile.md..."):
                         chosen_name = ob_name.strip() or "Friend"
-                        gadgets_cfg["user_name"] = chosen_name
-                        gadgets_cfg["onboarding_complete"] = True
-                        save_gadgets_config(gadgets_cfg)
+                        user_cfg["user_name"] = chosen_name
+                        user_cfg["onboarding_complete"] = True
+                        save_user_config(user_cfg)
                         polish_prompt = (
                             f"Create a clean, comprehensive markdown file at {PROFILE_PATH} for job applications. "
                             f"Include Candidate Info (Name: {ob_full_name or chosen_name}, Email: {ob_email}, Phone: {ob_phone}, "
@@ -589,18 +557,18 @@ if st.session_state.show_onboarding:
 
         with btn_col3:
             if st.button("Skip for Now"):
-                gadgets_cfg["onboarding_complete"] = True
-                save_gadgets_config(gadgets_cfg)
+                user_cfg["onboarding_complete"] = True
+                save_user_config(user_cfg)
                 st.session_state.show_onboarding = False
                 st.rerun()
 
 # =========================================================
 # MAIN 4-TAB INTERFACE (1:1 MAC & WINDOWS PARITY)
 # =========================================================
-tab_autonome, tab_tracker, tab_gadgets, tab_profile = st.tabs([
+tab_autonome, tab_tracker, tab_resume_gadget, tab_profile = st.tabs([
     "🤖 Autonome (Sonnet 5.5 Filler)",
     f"📊 Application Tracker ({len(tracker_df)})",
-    "🧰 Gadgets Hub (PDF/Word · Notion)",
+    "📄 PDF & Word Resume Gadget",
     "👤 Master Profile"
 ])
 
@@ -653,7 +621,7 @@ with tab_autonome:
                     logs = ""
 
                     cover_letter_instruction = ""
-                    if gadgets_cfg.get("pdf_auto_cover_letter"):
+                    if user_cfg.get("auto_cover_letter"):
                         cover_letter_instruction = (
                             f"Also write a tailored 3-paragraph cover letter for this specific job to {COVER_LETTER_PATH} "
                             f"and paste or upload it if the form asks for a cover letter. "
@@ -707,7 +675,6 @@ with tab_autonome:
                         detected_role = meta_match.group(2).strip()
                         detected_notes = meta_match.group(3).strip()
 
-                    # Save to local Application Tracker
                     append_application_to_tracker(
                         company=detected_company,
                         role=detected_role,
@@ -717,11 +684,7 @@ with tab_autonome:
                     )
 
                     # Record application run in usage tracker
-                    record_application_run(gadgets_cfg)
-
-                    if gadgets_cfg.get("notion_enabled"):
-                        ok, msg = push_to_notion(gadgets_cfg, detected_company, detected_role, url, "Ready to Review")
-                        st.caption(f"📓 Notion Gadget: {msg}")
+                    record_application_run(user_cfg)
 
                     status.update(label=f"✅ Logged & Ready in Chrome: {detected_company} — {detected_role}", state="complete")
 
@@ -838,25 +801,23 @@ with tab_tracker:
         )
 
 # ==========================================
-# TAB 3: DEDICATED GADGETS HUB (PDF/WORD + NOTION)
+# TAB 3: PDF & WORD RESUME GADGET
 # ==========================================
-with tab_gadgets:
-    st.subheader("🧰 Modular Gadgets Hub")
-    st.caption("Configure and run your standalone or integrated Gadgets for PDF/Word Resumes and Notion.")
+with tab_resume_gadget:
+    st.subheader("📄 PDF & Word (`.docx`) Resume Gadget")
+    st.caption("Upload or swap your `.pdf` or `.docx` resume, extract text into `profile.md`, and generate tailored cover letters with Sonnet 5.5.")
 
-    g_col1, g_col2 = st.columns(2)
+    r_col1, r_col2 = st.columns(2)
 
-    with g_col1:
+    with r_col1:
         with st.container(border=True):
-            st.markdown("### 📄 PDF & Word Resume Gadget")
-            st.caption("Manage `.pdf` or `.docx` resumes, extract text into `profile.md`, and generate cover letters with Sonnet 5.5.")
-
+            st.markdown("### 📎 Resume File & Text Extractor")
             if RESUME_PDF_PATH.exists():
                 size_kb = round(RESUME_PDF_PATH.stat().st_size / 1024, 1)
-                st.success(f"Active PDF: `resume.pdf` ({size_kb} KB)")
+                st.success(f"Active PDF Resume: `resume.pdf` ({size_kb} KB)")
             if RESUME_DOCX_PATH.exists():
                 size_kb = round(RESUME_DOCX_PATH.stat().st_size / 1024, 1)
-                st.success(f"Active Word Doc: `resume.docx` ({size_kb} KB)")
+                st.success(f"Active Word Resume: `resume.docx` ({size_kb} KB)")
             if not RESUME_PDF_PATH.exists() and not RESUME_DOCX_PATH.exists():
                 st.error("No `resume.pdf` or `resume.docx` found yet.")
 
@@ -864,24 +825,26 @@ with tab_gadgets:
             if uploaded_doc is not None:
                 extracted_text = save_and_extract_resume(uploaded_doc)
                 st.success(f"✅ Saved `{uploaded_doc.name}` ({len(extracted_text)} chars extracted)!")
+                st.text_area("Extracted Resume Text Preview:", value=extracted_text, height=180)
                 if st.button("📥 Append Extracted Resume Text to Master Profile"):
                     current_prof = PROFILE_PATH.read_text(encoding="utf-8") if PROFILE_PATH.exists() else ""
                     PROFILE_PATH.write_text(current_prof + "\n\n# Imported Resume Text\n" + extracted_text, encoding="utf-8")
                     st.toast("Appended resume text into profile.md!")
 
+    with r_col2:
+        with st.container(border=True):
+            st.markdown("### ✉️ Tailored Cover Letter Generator (Sonnet 5.5)")
             auto_cl = st.checkbox(
                 "Auto-generate tailored Cover Letter during Autonome runs",
-                value=gadgets_cfg.get("pdf_auto_cover_letter", False)
+                value=user_cfg.get("auto_cover_letter", False)
             )
-            if auto_cl != gadgets_cfg.get("pdf_auto_cover_letter"):
-                gadgets_cfg["pdf_auto_cover_letter"] = auto_cl
-                save_gadgets_config(gadgets_cfg)
-                st.toast("Updated Resume Gadget preference!")
+            if auto_cl != user_cfg.get("auto_cover_letter"):
+                user_cfg["auto_cover_letter"] = auto_cl
+                save_user_config(user_cfg)
+                st.toast("Updated Cover Letter preference!")
 
-            st.divider()
-            st.markdown("**Quick Cover Letter Generator (Sonnet 5.5)**")
-            jd_snippet = st.text_area("Paste Job Description or URL:", height=100, key="pdf_jd")
-            if st.button("✨ Generate Cover Letter"):
+            jd_snippet = st.text_area("Paste Job Description or Job URL:", height=140, key="pdf_jd")
+            if st.button("✨ Generate Cover Letter (Sonnet 5.5)"):
                 if not jd_snippet.strip():
                     st.warning("Paste a job description or link first.")
                 else:
@@ -912,59 +875,18 @@ with tab_gadgets:
                         )
                         st.code(res.stdout, language="markdown")
 
-    with g_col2:
-        with st.container(border=True):
-            st.markdown("### 📓 Notion Gadget")
-            st.caption("Auto-log filled applications to your Notion Database.")
-
-            notion_enabled = st.toggle("Enable Notion Sync", value=gadgets_cfg.get("notion_enabled", False))
-            notion_token = st.text_input(
-                "Notion Integration Token (`ntn_...` or `secret_...`)",
-                value=gadgets_cfg.get("notion_token", ""),
-                type="password"
-            )
-            notion_db = st.text_input(
-                "Notion Database ID",
-                value=gadgets_cfg.get("notion_database_id", ""),
-                help="Ensure your Notion database has 'Name' (Title), 'URL' (URL), and 'Status' (Text) properties."
-            )
-
-            if st.button("💾 Save Notion Gadget"):
-                gadgets_cfg["notion_enabled"] = notion_enabled
-                gadgets_cfg["notion_token"] = notion_token.strip()
-                gadgets_cfg["notion_database_id"] = notion_db.strip()
-                save_gadgets_config(gadgets_cfg)
-                st.success("Notion Gadget settings saved!")
-
-            if st.button("🧪 Test Notion Connection"):
-                ok, msg = push_to_notion(
-                    {
-                        "notion_enabled": True,
-                        "notion_token": notion_token.strip(),
-                        "notion_database_id": notion_db.strip()
-                    },
-                    "Acme Corp",
-                    "Sample Role",
-                    "https://example.com/test-job",
-                    "Gadget Connection Test"
-                )
-                if ok:
-                    st.success(msg)
-                else:
-                    st.error(msg)
-
 # ==========================================
 # TAB 4: MASTER PROFILE EDITOR
 # ==========================================
 with tab_profile:
     st.subheader("👤 Your Master Profile (`profile.md`)")
-    st.caption("Autonome and the PDF/Word Gadget read this file to answer application questions accurately.")
+    st.caption("Autonome and the Resume Gadget read this file to answer application questions accurately.")
     col_p1, col_p2 = st.columns([3, 1])
     with col_p2:
-        new_pref_name = st.text_input("Your Greeting Name:", value=gadgets_cfg.get("user_name", ""))
+        new_pref_name = st.text_input("Your Greeting Name:", value=user_cfg.get("user_name", ""))
         if st.button("💬 Update Greeting Name"):
-            gadgets_cfg["user_name"] = new_pref_name.strip()
-            save_gadgets_config(gadgets_cfg)
+            user_cfg["user_name"] = new_pref_name.strip()
+            save_user_config(user_cfg)
             st.toast("Greeting name updated!")
             st.rerun()
 

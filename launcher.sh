@@ -7,7 +7,7 @@ cd "$TARGET_DIR" || exit 1
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.npm-global/bin:$PATH"
 
 echo "=========================================="
-echo "   Autonome & Gadgets — Checking Updates  "
+echo "   Autonome Job Filler -- Checking Updates"
 echo "=========================================="
 
 if command -v git &> /dev/null; then
@@ -19,7 +19,7 @@ if command -v git &> /dev/null; then
         LOCAL_HASH=$(git rev-parse HEAD 2>/dev/null || echo "none")
         REMOTE_HASH=$(git rev-parse origin/main 2>/dev/null || echo "none")
         if [ "$LOCAL_HASH" != "$REMOTE_HASH" ] && [ "$REMOTE_HASH" != "none" ]; then
-            echo "⬇️  New update found on GitHub! Updating Autonome & Gadgets..."
+            echo "⬇️  New update found on GitHub! Updating Autonome..."
             git reset --hard origin/main --quiet
             chmod +x "$TARGET_DIR/launcher.sh"
             echo "✅ Updated to latest version ($REMOTE_HASH)."

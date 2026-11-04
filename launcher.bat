@@ -1,16 +1,20 @@
 @echo off
 setlocal EnableDelayedExpansion
-title Autonome & Gadgets Suite (Windows)
+chcp 65001 >nul 2>&1
+title Autonome Job Filler (Windows)
 
 cd /d "%~dp0"
 set "TARGET_DIR=%CD%"
 set "REPO_URL=https://github.com/YOUR_GITHUB_USERNAME/mac-job-filler.git"
 
+:: Add standard Windows install locations to PATH immediately
+set "PATH=%LOCALAPPDATA%\Programs\Python\Python314;%LOCALAPPDATA%\Programs\Python\Python313;%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;%LOCALAPPDATA%\Programs\Python\Python311;%LOCALAPPDATA%\Programs\Python\Python311\Scripts;%LOCALAPPDATA%\Python\pythoncore-3.14-64;C:\Program Files\Python312;C:\Program Files\Python312\Scripts;C:\Program Files\nodejs;%APPDATA%\npm;%PATH%"
+
 echo ==========================================
-echo    Autonome ^& Gadgets — Checking Updates
+echo    Autonome Job Filler -- Checking Updates
 echo ==========================================
 
-:: 1. Self-Update from GitHub on Boot (Preserves untracked profile.md, resume.pdf/.docx, applications_history.csv & gadgets_config.json)
+:: 1. Self-Update from GitHub on Boot (Preserves untracked personal files)
 where git >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
     if not exist ".git" (
@@ -38,49 +42,78 @@ if not exist "profile.md" (
     if exist "profile.example.md" copy /Y "profile.example.md" "profile.md" >nul
 )
 
-:: 3. Check for Node.js and Python on Windows (Install via winget if missing)
-where node >nul 2>&1
+:: 3. Check for Node.js on Windows
+node -v >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
-    echo Installing Node.js via winget...
-    winget install --id OpenJS.NodeJS.LTS -e --silent
-    set "PATH=%PATH%;C:\Program Files\nodejs;%APPDATA%\npm"
+    echo [Setup] Installing Node.js LTS via winget...
+    winget install --id OpenJS.NodeJS.LTS -e --silent --accept-package-agreements --accept-source-agreements
+    set "PATH=C:\Program Files\nodejs;%APPDATA%\npm;%PATH%"
 )
 
-where python >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo Installing Python 3 via winget...
-    winget install --id Python.Python.3.12 -e --silent
+:: 4. Check for REAL Python (Bypasses Windows 11 Microsoft Store fake python.exe stub)
+set "PYTHON_CMD="
+py -3 -c "import sys" >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    set "PYTHON_CMD=py -3"
+) else (
+    py -c "import sys" >nul 2>&1
+    if !ERRORLEVEL! EQU 0 (
+        set "PYTHON_CMD=py"
+    ) else (
+        python -c "import sys" >nul 2>&1
+        if !ERRORLEVEL! EQU 0 (
+            set "PYTHON_CMD=python"
+        )
+    )
 )
 
-:: 4. Install Claude Code CLI if missing
-where claude >nul 2>&1
+if "!PYTHON_CMD!"=="" (
+    echo [Setup] Real Python 3 not found. Installing Python 3.12 via winget...
+    winget install --id Python.Python.3.12 -e --silent --accept-package-agreements --accept-source-agreements
+    set "PATH=%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;C:\Program Files\Python312;C:\Program Files\Python312\Scripts;%PATH%"
+    if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" (
+        set "PYTHON_CMD=""%LOCALAPPDATA%\Programs\Python\Python312\python.exe"""
+    ) else if exist "C:\Program Files\Python312\python.exe" (
+        set "PYTHON_CMD=""C:\Program Files\Python312\python.exe"""
+    ) else (
+        set "PYTHON_CMD=python"
+    )
+)
+
+:: 5. Install Claude Code CLI if missing
+call claude --version >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
-    echo Installing Claude Code CLI...
+    echo [Setup] Installing Claude Code CLI...
     call npm install -g @anthropic-ai/claude-code
 )
 
-:: 5. Register Playwright MCP on Windows (using cmd /c npx wrapper required on Windows)
+:: 6. Register Playwright MCP on Windows (using cmd /c npx wrapper required on Windows)
 call claude mcp list 2>nul | findstr /I "playwright" >nul
 if %ERRORLEVEL% NEQ 0 (
-    echo Configuring Playwright Chrome Browser Bridge for Windows...
+    echo [Setup] Configuring Playwright Chrome Browser Bridge for Windows...
     call claude mcp add playwright -s user -- cmd /c npx -y @playwright/mcp@latest --browser chrome --user-data-dir "%TARGET_DIR%\chrome-profile"
 )
 
-:: 6. Set up Python venv with 1:1 PDF & Word (.docx) support and launch Streamlit
-if not exist "venv\Scripts\activate.bat" (
-    echo Creating local Python virtual environment...
-    python -m venv venv
-    call venv\Scripts\activate.bat
-    python -m pip install --upgrade pip streamlit pandas pypdf python-docx
-) else (
-    call venv\Scripts\activate.bat
-    python -m pip install -q streamlit pandas pypdf python-docx
+:: 7. Build Python venv using real Python binary and launch Streamlit directly from venv
+if not exist "venv\Scripts\python.exe" (
+    echo [Setup] Creating local Python virtual environment...
+    !PYTHON_CMD! -m venv venv
 )
+
+if not exist "venv\Scripts\python.exe" (
+    echo [ERROR] Could not create Python virtual environment.
+    echo Please close this window, open a fresh terminal, or install Python 3.12 from python.org.
+    pause
+    exit /b 1
+)
+
+echo [Setup] Verifying Python packages (streamlit, pandas, pypdf, python-docx)...
+"%TARGET_DIR%\venv\Scripts\python.exe" -m pip install -q --upgrade pip streamlit pandas pypdf python-docx
 
 echo.
 echo [FIRST TIME TIP] If applications fail to start, open a new Command Prompt,
 echo type 'claude', and then type '/login' once to link your Claude Pro account.
 echo.
 
-streamlit run app.py
+"%TARGET_DIR%\venv\Scripts\python.exe" -m streamlit run app.py
 pause

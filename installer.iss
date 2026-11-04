@@ -1,5 +1,5 @@
 [Setup]
-AppName=Autonome Job Filler & Gadgets Suite
+AppName=Autonome Job Filler
 AppVersion=1.1
 DefaultDirName={userdesktop}\JobFiller
 DisableDirPage=no
@@ -22,4 +22,4 @@ Name: "{userdesktop}\Autonome Job Filler"; Filename: "{app}\launcher.bat"; Worki
 Name: "{group}\Autonome Job Filler"; Filename: "{app}\launcher.bat"; WorkingDir: "{app}"
 
 [Run]
-Filename: "{app}\launcher.bat"; Description: "Launch Autonome Job Filler Suite now"; Flags: nowait postinstall skipifsilent shellexec
+Filename: "{app}\launcher.bat"; Description: "Launch Autonome Job Filler now"; Flags: nowait postinstall skipifsilent shellexec
