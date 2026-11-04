@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import tempfile
 import urllib.parse
+import zipfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -94,6 +95,30 @@ COACH_RULES = """You are a practical, upbeat job-search coach working for one ca
 Be direct and specific. When they paste a job ad, give a quick fit check: strengths, honest gaps,
 any knockout requirements, and whether it's worth applying. When they ask for something they'll send
 (screening answers, emails, messages), follow the writing rules. Keep replies short unless asked."""
+
+PROFILE_RULES = """You build a job-seeker's master profile from material they give you (old resumes, cover letters,
+LinkedIn exports, notes, and exports of past AI chats). The profile is what every application is written from,
+so accuracy matters more than polish.
+Rules:
+- Use ONLY facts that appear in the material or the current profile. Never invent employers, dates, numbers,
+  tools, qualifications or links. If something important is missing, write [ADD: what's needed].
+- When sources disagree (e.g. different dates), use the most recent or most specific one and add [CHECK: ...].
+- Put skills or tools the person only mentions learning, reading about or wanting to try under "Don't claim".
+- Leave out anything sensitive that doesn't belong on a job application: passwords, API keys, bank or card details,
+  government ID numbers, health information, and other people's private details (except referees they chose).
+- Material from past AI chats may include suggestions the person never acted on. Only keep what reads as true of them.
+- Write achievements with numbers and outcomes where the material supports them.
+Output ONLY the finished profile as markdown, using exactly these sections in this order:
+# Candidate
+# Positioning (one line that leads every application)
+# Work rights & preferences
+# Proof links (portfolio, case studies, articles)
+# Don't claim (skills/tools I haven't used, so they never get claimed)
+# Referees (only share when asked)
+# Resume
+# Skills
+# Stories (short STAR examples for screening questions and interviews)
+# My writing voice (how I like to sound, phrases I use or avoid)"""
 
 FUN_FACTS = [
     "Applying in the first 24-48 hours after a job is posted noticeably improves your odds.",
@@ -208,22 +233,117 @@ def active_resume():
     return next((p for p in (RESUME_PDF_PATH, RESUME_DOCX_PATH) if p.exists()), None)
 
 
-def save_resume(uploaded):
-    raw = uploaded.getvalue()
-    ext = Path(uploaded.name).suffix.lower()
+def document_text(name, raw):
+    """Plain text from a PDF, Word, or text-like file."""
+    ext = Path(name).suffix.lower()
     try:
         if ext == ".pdf":
-            RESUME_DOCX_PATH.unlink(missing_ok=True)
-            RESUME_PDF_PATH.write_bytes(raw)
             return "\n".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(raw)).pages).strip()
-        RESUME_PDF_PATH.unlink(missing_ok=True)
-        RESUME_DOCX_PATH.write_bytes(raw)
-        doc = Document(io.BytesIO(raw))
-        lines = [p.text for p in doc.paragraphs if p.text.strip()]
-        lines += [" | ".join(c.text.strip() for c in r.cells if c.text.strip()) for t in doc.tables for r in t.rows]
-        return "\n".join(l for l in lines if l).strip()
+        if ext == ".docx":
+            doc = Document(io.BytesIO(raw))
+            lines = [p.text for p in doc.paragraphs if p.text.strip()]
+            lines += [" | ".join(c.text.strip() for c in r.cells if c.text.strip()) for t in doc.tables for r in t.rows]
+            return "\n".join(l for l in lines if l).strip()
+        return raw.decode("utf-8", errors="replace").strip()
     except Exception as e:
-        return f"[Couldn't read the text automatically: {e}]"
+        return f"[Couldn't read {name}: {e}]"
+
+
+def save_resume(uploaded):
+    raw = uploaded.getvalue()
+    pdf = Path(uploaded.name).suffix.lower() == ".pdf"
+    (RESUME_DOCX_PATH if pdf else RESUME_PDF_PATH).unlink(missing_ok=True)
+    (RESUME_PDF_PATH if pdf else RESUME_DOCX_PATH).write_bytes(raw)
+    return document_text(uploaded.name, raw)
+
+
+# ---------------------------------------------------------------------------
+# Context import (ChatGPT export, LinkedIn export, old docs) for the profile builder
+# ---------------------------------------------------------------------------
+CONTEXT_BUDGET = 150_000          # characters sent to the AI (~35k tokens)
+ZIP_MEMBER_LIMIT = 60_000_000     # bytes per file inside a zip (zip-bomb guard)
+CAREER_WORDS = re.compile(r"resume|résumé|\bcv\b|cover letter|job|interview|career|linkedin|salary|hiring|recruit|"
+                          r"skill|experience|portfolio|promotion|manager|role|application|position|employer|degree", re.I)
+LINKEDIN_FILES = ("profile", "positions", "education", "skills", "certifications", "projects", "languages",
+                  "recommendations_received", "honors", "volunteering", "courses", "publications")
+TEXT_EXTS = {".txt", ".md", ".csv", ".json", ".pdf", ".docx", ".html", ".htm"}
+
+
+def chatgpt_conversations(data):
+    """Turns a ChatGPT data export (conversations.json) into text, most career-relevant chats first."""
+    chats = []
+    for conv in data if isinstance(data, list) else []:
+        if not isinstance(conv, dict) or not isinstance(conv.get("mapping"), dict):
+            continue
+        turns = []
+        for node in conv["mapping"].values():
+            msg = (node or {}).get("message") or {}
+            role = (msg.get("author") or {}).get("role")
+            parts = (msg.get("content") or {}).get("parts") or []
+            text = " ".join(p for p in parts if isinstance(p, str)).strip()
+            if role in ("user", "assistant") and text:
+                turns.append((msg.get("create_time") or 0, role, text))
+        if not turns:
+            continue
+        turns.sort(key=lambda t: t[0] or 0)
+        body = "\n".join(f"{'ME' if r == 'user' else 'AI'}: {t}" for _, r, t in turns)
+        title = conv.get("title") or "Untitled chat"
+        score = len(CAREER_WORDS.findall(title)) * 5 + len(CAREER_WORDS.findall(" ".join(t for _, r, t in turns if r == "user")))
+        chats.append((score, conv.get("update_time") or conv.get("create_time") or 0, f"## ChatGPT chat: {title}\n{body}"))
+    chats.sort(key=lambda c: (c[0], c[1]), reverse=True)
+    return [c[2] for c in chats if c[0] > 0] or [c[2] for c in chats[:20]]
+
+
+def context_from_file(name, raw):
+    """Returns a list of text chunks from one uploaded file (zip exports are opened safely)."""
+    ext = Path(name).suffix.lower()
+    if ext == ".zip":
+        chunks = []
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                for info in z.infolist():
+                    inner = Path(info.filename)
+                    if info.is_dir() or info.file_size > ZIP_MEMBER_LIMIT or inner.suffix.lower() not in TEXT_EXTS:
+                        continue
+                    stem = inner.stem.lower()
+                    if inner.name.lower() == "conversations.json" or inner.suffix.lower() in {".pdf", ".docx", ".txt", ".md"} \
+                            or any(stem == f or stem.startswith(f) for f in LINKEDIN_FILES):
+                        chunks += context_from_file(inner.name, z.read(info))
+        except zipfile.BadZipFile:
+            return [f"[{name} isn't a readable zip file]"]
+        return chunks
+    if ext == ".json":
+        try:
+            data = json.loads(raw.decode("utf-8", errors="replace"))
+        except ValueError:
+            return [document_text(name, raw)]
+        convs = chatgpt_conversations(data)
+        return convs or [f"## {name}\n{json.dumps(data, ensure_ascii=False)[:CONTEXT_BUDGET]}"]
+    if ext in (".html", ".htm"):
+        text = re.sub(r"<[^>]+>", " ", raw.decode("utf-8", errors="replace"))
+        text = re.sub(r"\s+", " ", text).strip()
+        return [f"## {name}\n{text}"]
+    return [f"## {name}\n{document_text(name, raw)}"]
+
+
+def build_context(files, pasted):
+    """Joins pasted text + uploads into one block under the budget. Returns (text, summary)."""
+    chunks = [f"## Pasted notes\n{pasted.strip()}"] if pasted.strip() else []
+    for f in files or []:
+        chunks += context_from_file(f.name, f.getvalue())
+    out, used, skipped = [], 0, 0
+    for c in chunks:
+        if used + len(c) > CONTEXT_BUDGET:
+            room = CONTEXT_BUDGET - used
+            if room > 2000:
+                out.append(c[:room] + "\n[...trimmed]")
+                used = CONTEXT_BUDGET
+            skipped += 1
+            continue
+        out.append(c)
+        used += len(c)
+    summary = f"{len(out)} piece(s) of context, {used:,} characters" + (f" ({skipped} trimmed or left out to fit)" if skipped else "")
+    return "\n\n".join(out), summary
 
 
 def profile_text():
@@ -723,6 +843,7 @@ if st.session_state.show_onboarding:
         setup_checklist()
         st.markdown("#### Step 2 · About you")
         st.write("Tell Job Hunter who you are and drop in your resume. Everything stays in this folder on your computer.")
+        st.caption("💡 Got a ChatGPT or LinkedIn data export, or old cover letters? After this step, open **Profile → Build my profile from context** and your AI will fill in the rest.")
         with st.form("onboarding"):
             c1, c2 = st.columns(2)
             with c1:
@@ -775,6 +896,15 @@ if st.session_state.show_onboarding:
 
 # Resume
 {resume_text or "Upload your resume in the Profile tab."}
+
+# Skills
+-
+
+# Stories (short STAR examples for screening questions and interviews)
+-
+
+# My writing voice (how I like to sound, phrases I use or avoid)
+-
 """, encoding="utf-8")
         if submitted or skipped:
             cfg["onboarding_complete"] = True
@@ -1008,6 +1138,46 @@ with tab_usage:
 
 with tab_profile:
     st.subheader("👤 Your profile")
+    st.caption("This is the context your AI uses for everything: letters, messages, answers and Auto-Apply.")
+    with st.expander("🧠 Build or improve my profile from context (ChatGPT export, LinkedIn, old resumes…)",
+                     expanded="Alex Rivera" in profile_text() or "[ADD:" in profile_text()):
+        st.markdown(
+            "Give your AI anything that describes you, and it drafts a complete profile using **only what's in there**. "
+            "Gaps are marked `[ADD: …]` so nothing gets made up. You review it before anything is saved.\n\n"
+            "- **ChatGPT history:** chatgpt.com → Settings → *Data controls* → **Export data**. You'll get an email; upload the `.zip` (or the `conversations.json` inside it). Career-related chats are used first.\n"
+            "- **LinkedIn:** Settings → *Data privacy* → **Get a copy of your data** → upload the `.zip`.\n"
+            "- **Anything else:** old resumes, cover letters, performance reviews, notes (PDF, Word, text)."
+        )
+        ctx_files = st.file_uploader("Upload context files", type=["zip", "json", "pdf", "docx", "txt", "md", "csv", "html"],
+                                     accept_multiple_files=True, key="ctx_files")
+        ctx_paste = st.text_area("…or paste anything (a chat, your LinkedIn About, notes)", height=140, key="ctx_paste")
+        keep_current = st.checkbox("Merge with what's already in my profile", value="Alex Rivera" not in profile_text())
+        draft_clicked = st.button("✨ Draft my profile", type="primary")
+        if draft_clicked and not (ctx_files or ctx_paste.strip()):
+            st.warning("Upload a file or paste some text first.")
+        elif draft_clicked:
+            with st.spinner("Reading your context…"):
+                context, summary = build_context(ctx_files, ctx_paste)
+            st.caption(f"Using {summary}.")
+            current = f"\n\nCurrent profile to merge with:\n<current_profile>\n{profile_text()}\n</current_profile>" if keep_current else ""
+            with st.spinner(f"{ai_name()} is drafting your profile… (large exports can take a minute)"):
+                res = run_ai("Profile builder", f"Build my profile from this material.{current}\n\n" + untrusted("my_material", context), PROFILE_RULES)
+            if res["ok"]:
+                st.session_state.profile_draft = res["text"].strip().removeprefix("```markdown").removeprefix("```").removesuffix("```").strip()
+            else:
+                st.error(res["text"])
+        if st.session_state.get("profile_draft"):
+            st.markdown("**Your draft:** edit anything, then save. Search for `[ADD:` and `[CHECK:` to fill gaps.")
+            draft = st.text_area("Draft profile", value=st.session_state.profile_draft, height=420, key="draft_editor", label_visibility="collapsed")
+            d1, d2, _ = st.columns([1, 1, 3])
+            if d1.button("💾 Use this as my profile", type="primary", width="stretch"):
+                PROFILE_PATH.write_text(draft, encoding="utf-8")
+                st.session_state.profile_draft = ""
+                st.toast("Profile saved")
+                st.rerun()
+            if d2.button("Discard", width="stretch"):
+                st.session_state.profile_draft = ""
+                st.rerun()
     p1, p2 = st.columns([3, 2])
     with p2:
         with st.container(border=True):

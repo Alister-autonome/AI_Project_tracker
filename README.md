@@ -9,6 +9,7 @@ Your own job-search assistant, powered by **your Claude or ChatGPT account** (yo
 - 📊 **Tracker:** every job in one place, with statuses, contacts, follow-up reminders and a pipeline summary.
 - 🤖 **Auto-Apply:** paste job links. your AI fills each application in Chrome from your profile, uploads your resume, then **stops before Submit** so you check and send it yourself.
 - ✉️ **Cover letters & LinkedIn messages:** written in your voice, using only what's true in your profile.
+- 🧠 **Profile from context:** drop in a ChatGPT data export, a LinkedIn export, old resumes or notes, and your AI drafts your whole profile using only what's in there. Gaps are flagged for you to fill.
 - 💬 **Ask AI:** a job-search coach that knows your background (screening questions, fit checks, interview prep).
 - 📈 **Usage:** your plan limits (5-hour and weekly, when your AI reports them) plus the tokens every request used.
 
@@ -29,7 +30,11 @@ Your own job-search assistant, powered by **your Claude or ChatGPT account** (yo
 3. In the app, follow **Welcome → Step 1 / Step 2**:
    - Step 1: **choose Claude or ChatGPT**. A checklist then installs that AI's free helper app (Claude Code or Codex) and signs you in with one click each: your browser opens, you sign in, you come back. It also checks Chrome and Node.js. If your plan doesn't include it (for example Claude's Free plan), it says so and points you to the fix or the other AI.
    - Step 2 takes your name and contact details and your resume (PDF or Word).
-4. Open the **👤 Profile** tab and fill in *Positioning*, *Proof links* and **Don't claim**, so Claude never says you've used a tool you haven't.
+4. Open **👤 Profile → Build my profile from context**. Upload any of these and click **Draft my profile**:
+   - a ChatGPT export (chatgpt.com → Settings → Data controls → Export data → upload the `.zip`),
+   - a LinkedIn export (Settings → Data privacy → Get a copy of your data),
+   - old resumes or cover letters.
+   Review the draft, fill anything marked `[ADD: …]`, and check that **Don't claim** lists tools you haven't used.
 
 Next time, just open Job Hunter from your Desktop. It updates itself automatically.
 
@@ -40,7 +45,8 @@ Next time, just open Job Hunter from your Desktop. It updates itself automatical
 | 📊 Tracker | Add jobs, change Status as you go, set a Follow-up date. Edits save automatically. |
 | 🤖 Auto-Apply | Paste links → **Start**. Check each Chrome tab, finish anything listed, press Submit yourself, then mark it *Applied*. |
 | ✉️ Cover Letter & Outreach | Paste the job ad → cover letter (download as Word), LinkedIn connection note + message, or a fit check. |
-| 💬 Ask Claude | Anything job-search related. Click **New conversation** to start fresh. |
+| 👤 Profile | Build or refresh your profile from exports and old docs, or edit it directly. It's the context your AI uses for everything. |
+| 💬 Ask AI | Anything job-search related. Click **New conversation** to start fresh. |
 | 📈 Usage | Plan limits and history. **Check now** in the sidebar refreshes the limits. |
 
 **Tips that work:** apply within 48 hours of a job being posted, send the hiring manager a short note the same day, and follow up after a week.
@@ -55,7 +61,7 @@ Next time, just open Job Hunter from your Desktop. It updates itself automatical
   - **Claude:** Claude Code's `--restricted` mode, with no shell, code or file tools, no MCP servers, and no personal settings or plugins loaded.
   - **ChatGPT:** Codex in a read-only sandbox, with its shell tool, web search, user config and rules switched off. Writing tasks run in an empty temp folder.
 - **Auto-Apply gets a browser and nothing else** (on either AI). It uses its own Chrome profile (`chrome-profile/`), with Playwright's "run code" tool blocked. It's told to treat web pages as untrusted, never press Enter in forms, never tick consent boxes, never submit, and to stop at logins and CAPTCHAs.
-- **Job ads are treated as data.** Pasted text is wrapped and marked as third-party content, so instructions hidden in an ad are ignored.
+- **Job ads and imported context are treated as data.** Pasted or uploaded text is wrapped and marked as third-party content, so instructions hidden in it are ignored. The profile builder also leaves out passwords, ID numbers, financial and health details, and keeps only the most relevant ~150k characters of large exports. Exports are read in memory and never stored.
 - **Lean on your plan.** Claude requests skip Claude Code's default context, so a cover letter costs a few thousand tokens instead of 100k+.
 - **Updates come only from this repository** (`main` branch), and the launcher checks for them each time it starts.
 

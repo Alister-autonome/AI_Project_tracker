@@ -138,7 +138,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: "Job Hunter 2.1 — Claude or ChatGPT, macOS & Windows"
+          name: "Job Hunter 2.2 — Claude or ChatGPT, macOS & Windows"
           body: |
             Your own job-search assistant, powered by **your Claude or ChatGPT account**, running only on your computer.
 
@@ -151,13 +151,14 @@ jobs:
             ## 🚀 First run (about 5 minutes)
             1. **Choose your AI:** Claude (Pro or Max plan) or ChatGPT (any plan, including Free).
             2. Click **Install**, then **Sign in**. Your browser opens; sign in and come back. If your plan can't be used, Job Hunter tells you why and what to do.
-            3. Add your details and resume, then fill in **Profile → Don't claim** so your AI never says you've used a tool you haven't.
+            3. Add your details and resume. Then use **Profile → Build my profile from context** with your ChatGPT or LinkedIn export, and check **Don't claim** so your AI never says you've used a tool you haven't.
 
             ## ✨ What's in this release
             - 🔀 **Claude or ChatGPT:** pick at setup, switch from the sidebar any time. Every feature works on both.
             - 📊 **Tracker first:** pipeline summary, follow-up reminders, contacts, search, and edits that save automatically.
             - 🤖 **Auto-Apply:** fills applications in Chrome from your profile and **stops before Submit**.
             - ✉️ **Cover letters (Word download), LinkedIn messages and fit checks**, in your voice, using only what's true.
+            - 🧠 **New: profile from context.** Drop in a ChatGPT data export, a LinkedIn export or old resumes, and your AI drafts your whole profile from them (facts only, with gaps flagged).
             - 💬 **Ask AI:** a job-search coach that knows your background.
             - 📈 **Usage:** plan limits (5-hour and weekly) and tokens per request.
             - 🔒 **Locked down:** localhost only, no shell or code tools for the AI, job ads treated as untrusted text.

@@ -30,3 +30,12 @@ I turn messy marketing data into campaigns that pay for themselves, and I want t
 - Marketing Coordinator, Acme Corp (Jan 2023 - Present): ran 40+ campaigns, cut reporting time 60% by automating dashboards.
 - Junior Associate, Beta LLC (Jun 2021 - Dec 2022)
 - B.A. Communications, State University (2021)
+
+# Skills
+- Campaign analytics, HubSpot, Google Analytics 4, Looker Studio
+
+# Stories (short STAR examples for screening questions and interviews)
+- Reporting automation: weekly reports took 6 hours by hand (S/T), I rebuilt them as live dashboards (A), now 1 hour a week (R).
+
+# My writing voice (how I like to sound, phrases I use or avoid)
+- Direct and friendly, no buzzwords. Short sentences.
