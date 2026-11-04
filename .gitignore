@@ -1,11 +1,15 @@
 profile.md
 resume.pdf
+resume.docx
 cover_letter.pdf
+cover_letter.md
 gadgets_config.json
 applications_history.csv
 venv/
 chrome-profile/
 pkg_root/
+Output/
 *.pkg
+*.exe
 .DS_Store
 __pycache__/

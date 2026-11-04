@@ -10,7 +10,6 @@ echo "=========================================="
 echo "   Autonome & Gadgets — Checking Updates  "
 echo "=========================================="
 
-# 1. Self-Update from GitHub on Boot (Preserves untracked profile.md, resume.pdf, applications_history.csv & gadgets_config.json)
 if command -v git &> /dev/null; then
     if [ ! -d ".git" ]; then
         git init -q
@@ -32,12 +31,10 @@ if command -v git &> /dev/null; then
     fi
 fi
 
-# 2. Seed profile.md from template without overwriting user edits
 if [ ! -f "profile.md" ] && [ -f "profile.example.md" ]; then
     cp profile.example.md profile.md
 fi
 
-# 3. Install dependencies if missing
 if ! command -v brew &> /dev/null; then
     echo "Installing Homebrew (you may be prompted for your Mac password)..."
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -63,10 +60,10 @@ if [ ! -d "venv" ]; then
     echo "Creating local Python environment..."
     python3 -m venv venv
     source venv/bin/activate
-    pip install --upgrade pip streamlit pandas pypdf
+    pip install --upgrade pip streamlit pandas pypdf python-docx
 else
     source venv/bin/activate
-    pip install -q pandas pypdf
+    pip install -q streamlit pandas pypdf python-docx
 fi
 
 echo ""

@@ -5,3 +5,5 @@
 *.md text eol=lf
 *.plist text eol=lf
 *.json text eol=lf
+*.bat text eol=crlf
+*.iss text eol=crlf

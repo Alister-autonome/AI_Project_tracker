@@ -2,17 +2,32 @@ import streamlit as st
 import subprocess
 import shutil
 import json
+import os
 import re
+import io
+import random
 import urllib.request
-import urllib.parse
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
+from pypdf import PdfReader
+from docx import Document
+
+IS_WINDOWS = os.name == "nt"
+CLAUDE_BIN = "claude.cmd" if IS_WINDOWS else "claude"
+
+# Default to Sonnet 5.5 alias to preserve user's Claude compute quota
+SONNET_MODEL_OPTIONS = [
+    "sonnet",
+    "claude-sonnet-5-5",
+    "claude-sonnet-4-5"
+]
 
 BASE_DIR = Path(__file__).parent.resolve()
 PROFILE_PATH = BASE_DIR / "profile.md"
 EXAMPLE_PROFILE_PATH = BASE_DIR / "profile.example.md"
-RESUME_PATH = BASE_DIR / "resume.pdf"
+RESUME_PDF_PATH = BASE_DIR / "resume.pdf"
+RESUME_DOCX_PATH = BASE_DIR / "resume.docx"
 COVER_LETTER_PATH = BASE_DIR / "cover_letter.md"
 GADGETS_CONFIG_PATH = BASE_DIR / "gadgets_config.json"
 HISTORY_PATH = BASE_DIR / "applications_history.csv"
@@ -29,11 +44,59 @@ STATUS_OPTIONS = [
 
 TRACKER_COLUMNS = ["Date", "Company", "Role", "Status", "URL", "Notes"]
 
+FUN_QUOTES_AND_PUNS = [
+    "💡 **Job Fact:** Roughly 70% of jobs are never published publicly—and for the other 30%, you now have a robot filling out the forms!",
+    "😄 **Career Pun:** Why did the resume go to the gym? To get a little more *work experience*!",
+    "🚀 **Motivational Boost:** Every 'No' or ghosted application is just one step closer to the company that says 'When can you start?'",
+    "😄 **Career Pun:** I used to work at a calendar factory, but I got fired for taking a couple of days off. Let's find you a better gig today!",
+    "💡 **Did You Know?** Tailoring your resume and answers increases interview callbacks by up to 2.4x—good thing Autonome reads your Master Profile every time!",
+    "😄 **Career Pun:** Interviewer: 'Where do you see yourself in 5 years?' Me: 'Hopefully not still typing my work history into Workday after uploading my PDF!'",
+    "🌟 **Motivational Boost:** You don't need 100 job offers—you only need **one** great 'Yes'. Let's queue up some links and go get it!",
+    "😄 **Career Pun:** My friend got a job at the bakery because he really *kneaded* the dough. Let's go get yours!"
+]
+
 st.set_page_config(page_title="Autonome & Job Tracker Suite", layout="wide")
 
 # Seed profile.md on first run if missing
 if not PROFILE_PATH.exists() and EXAMPLE_PROFILE_PATH.exists():
     shutil.copy(EXAMPLE_PROFILE_PATH, PROFILE_PATH)
+
+def get_active_resume_path():
+    if RESUME_PDF_PATH.exists():
+        return RESUME_PDF_PATH
+    if RESUME_DOCX_PATH.exists():
+        return RESUME_DOCX_PATH
+    return None
+
+def save_and_extract_resume(uploaded_file):
+    """Saves uploaded .pdf or .docx locally and extracts its plain text."""
+    raw_bytes = uploaded_file.read()
+    ext = Path(uploaded_file.name).suffix.lower()
+    extracted_text = ""
+
+    if ext == ".pdf":
+        RESUME_PDF_PATH.write_bytes(raw_bytes)
+        try:
+            reader = PdfReader(io.BytesIO(raw_bytes))
+            pages = [page.extract_text() or "" for page in reader.pages]
+            extracted_text = "\n".join(pages).strip()
+        except Exception as e:
+            extracted_text = f"[Could not extract PDF text automatically: {e}]"
+    elif ext == ".docx":
+        RESUME_DOCX_PATH.write_bytes(raw_bytes)
+        try:
+            doc = Document(io.BytesIO(raw_bytes))
+            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+            for table in doc.tables:
+                for row in table.rows:
+                    row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                    if row_text:
+                        paragraphs.append(row_text)
+            extracted_text = "\n".join(paragraphs).strip()
+        except Exception as e:
+            extracted_text = f"[Could not extract Word .docx text automatically: {e}]"
+
+    return extracted_text
 
 def load_tracker_df():
     if not HISTORY_PATH.exists():
@@ -42,7 +105,6 @@ def load_tracker_df():
         return df
     try:
         df = pd.read_csv(HISTORY_PATH, dtype=str).fillna("")
-        # Migrate legacy 3-column CSVs gracefully if needed
         if "timestamp" in df.columns and "Date" not in df.columns:
             df = df.rename(columns={"timestamp": "Date", "url": "URL", "status": "Status"})
         for col in TRACKER_COLUMNS:
@@ -70,13 +132,12 @@ def append_application_to_tracker(company, role, status, url, notes=""):
 
 def load_gadgets_config():
     default_cfg = {
+        "user_name": "",
+        "onboarding_complete": False,
+        "claude_model": "sonnet",
         "notion_enabled": False,
         "notion_token": "",
         "notion_database_id": "",
-        "trello_enabled": False,
-        "trello_api_key": "",
-        "trello_token": "",
-        "trello_list_id": "",
         "pdf_auto_cover_letter": False
     }
     if GADGETS_CONFIG_PATH.exists():
@@ -102,24 +163,6 @@ def get_git_version():
         return res.stdout.strip() if res.returncode == 0 else "local"
     except Exception:
         return "local"
-
-def push_to_trello(cfg, company, role, job_url, status_note="Ready to Review"):
-    if not (cfg.get("trello_enabled") and cfg.get("trello_api_key") and cfg.get("trello_token") and cfg.get("trello_list_id")):
-        return False, "Trello Gadget not configured or disabled."
-    try:
-        card_title = f"{company} — {role}" if company and company != "Unknown Company" else f"Application: {job_url[:50]}"
-        params = urllib.parse.urlencode({
-            "idList": cfg["trello_list_id"],
-            "key": cfg["trello_api_key"],
-            "token": cfg["trello_token"],
-            "name": card_title,
-            "desc": f"Company: {company}\nRole: {role}\nStatus: {status_note}\nURL: {job_url}\nLogged: {datetime.now().isoformat()}"
-        }).encode("utf-8")
-        req = urllib.request.Request("https://api.trello.com/1/cards", data=params, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status == 200, "Synced to Trello board!"
-    except Exception as e:
-        return False, f"Trello error: {e}"
 
 def push_to_notion(cfg, company, role, job_url, status_note="Ready to Review"):
     if not (cfg.get("notion_enabled") and cfg.get("notion_token") and cfg.get("notion_database_id")):
@@ -151,11 +194,34 @@ def push_to_notion(cfg, company, role, job_url, status_note="Ready to Review"):
 
 gadgets_cfg = load_gadgets_config()
 tracker_df = load_tracker_df()
+active_resume = get_active_resume_path()
+active_model = gadgets_cfg.get("claude_model", "sonnet")
 
-# Sidebar: System Updates, Mini Pipeline Summary & Active Gadgets
+if "current_quote" not in st.session_state:
+    st.session_state.current_quote = random.choice(FUN_QUOTES_AND_PUNS)
+
+if "show_onboarding" not in st.session_state:
+    st.session_state.show_onboarding = not gadgets_cfg.get("onboarding_complete", False)
+
+# Sidebar: System Updates, Sonnet 5.5 Compute Saver, Onboarding Trigger & Stats
 with st.sidebar:
     st.header("⚙️ Autonome Suite")
-    st.caption(f"Current Build: `{get_git_version()}`")
+    os_badge = "🪟 Windows" if IS_WINDOWS else "🍎 macOS"
+    st.caption(f"Platform: **{os_badge}** | Build: `{get_git_version()}`")
+    st.success(f"⚡ **Compute Saver Active:** Locked to **Sonnet 5.5** (`{active_model}`)")
+
+    with st.expander("🔧 Change Sonnet 5.5 Model ID"):
+        selected_model = st.selectbox(
+            "Sonnet 5.5 CLI Flag:",
+            options=SONNET_MODEL_OPTIONS,
+            index=SONNET_MODEL_OPTIONS.index(active_model) if active_model in SONNET_MODEL_OPTIONS else 0,
+            help="Uses Sonnet 5.5 instead of Opus to conserve your Claude Pro compute quota."
+        )
+        if selected_model != active_model:
+            gadgets_cfg["claude_model"] = selected_model
+            save_gadgets_config(gadgets_cfg)
+            st.rerun()
+
     if st.button("🔄 Check & Pull GitHub Update"):
         with st.spinner("Checking GitHub for updates..."):
             fetch = subprocess.run(["git", "fetch", "origin", "main"], cwd=str(BASE_DIR), capture_output=True, text=True)
@@ -166,6 +232,10 @@ with st.sidebar:
             else:
                 st.warning("Could not reach GitHub. Running current local version.")
 
+    if st.button("✨ Re-run Onboarding Wizard"):
+        st.session_state.show_onboarding = True
+        st.rerun()
+
     st.divider()
     st.subheader("📊 Quick Tracker Stats")
     st.write(f"🗂️ **Total Tracked:** {len(tracker_df)}")
@@ -175,31 +245,162 @@ with st.sidebar:
 
     st.divider()
     st.subheader("🧰 Active Gadgets")
-    st.write(f"📄 **PDF Resume:** {'✅ Ready' if RESUME_PATH.exists() else '❌ Missing'}")
+    resume_label = f"✅ {active_resume.name}" if active_resume else "❌ Missing"
+    st.write(f"📄 **Resume File:** {resume_label}")
     st.write(f"📝 **Auto Cover Letter:** {'🟢 ON' if gadgets_cfg.get('pdf_auto_cover_letter') else '⚪ OFF'}")
     st.write(f"📓 **Notion Sync:** {'🟢 ON' if gadgets_cfg.get('notion_enabled') else '⚪ OFF'}")
-    st.write(f"📋 **Trello Sync:** {'🟢 ON' if gadgets_cfg.get('trello_enabled') else '⚪ OFF'}")
 
-    st.divider()
-    st.caption("💡 All personal files (`profile.md`, `resume.pdf`, `applications_history.csv`, and Gadget keys) are isolated from Git auto-updates.")
+# =========================================================
+# PERSONALIZED GREETING BANNER ("Hi [Name]!" + Pun / Fact)
+# =========================================================
+display_name = gadgets_cfg.get("user_name", "").strip() or "Friend"
+greet_col1, greet_col2 = st.columns([5, 1])
+with greet_col1:
+    st.title(f"👋 Hi {display_name}! Ready to land your next role?")
+    st.info(st.session_state.current_quote)
+with greet_col2:
+    st.write("")
+    st.write("")
+    if st.button("🎲 New Pun / Fact"):
+        st.session_state.current_quote = random.choice(FUN_QUOTES_AND_PUNS)
+        st.rerun()
 
-st.title("🚀 Autonome & Job Application Tracker")
+# =========================================================
+# INTERACTIVE FIRST-RUN ONBOARDING WIZARD
+# =========================================================
+if st.session_state.show_onboarding:
+    with st.container(border=True):
+        st.subheader("🎉 Welcome! Let's Set Up Your Profile & Resume (Takes 60 Seconds)")
+        st.markdown(
+            "Complete this quick setup so **Autonome** knows your name, has your **PDF or Word (`.docx`) resume**, "
+            "and builds your `profile.md` answer sheet automatically using **Sonnet 5.5**."
+        )
 
+        ob_col1, ob_col2 = st.columns(2)
+        with ob_col1:
+            st.markdown("#### 1. Your Basic Details")
+            ob_name = st.text_input("What's your first name (or preferred name)?", value=gadgets_cfg.get("user_name", ""), placeholder="e.g. Sarah")
+            ob_full_name = st.text_input("Full Legal Name (for job forms)", value=ob_name, placeholder="e.g. Sarah Jenkins")
+            ob_email = st.text_input("Email Address", placeholder="sarah@example.com")
+            ob_phone = st.text_input("Phone Number", placeholder="555-123-4567")
+            ob_location = st.text_input("City, State / Country", placeholder="Melbourne, VIC (or Austin, TX)")
+            ob_linkedin = st.text_input("LinkedIn URL", placeholder="https://linkedin.com/in/...")
+
+        with ob_col2:
+            st.markdown("#### 2. Upload Your Resume (`.pdf` or `.docx`)")
+            ob_resume = st.file_uploader(
+                "Attach your PDF or Word Resume — we'll extract your experience automatically:",
+                type=["pdf", "docx"],
+                key="onboarding_resume_uploader"
+            )
+            extracted_resume_preview = st.session_state.get("extracted_resume_text", "")
+            if ob_resume is not None:
+                extracted_resume_preview = save_and_extract_resume(ob_resume)
+                st.session_state.extracted_resume_text = extracted_resume_preview
+                st.success(f"✅ Saved `{ob_resume.name}` and extracted {len(extracted_resume_preview)} characters of text!")
+
+            st.markdown("#### 3. Standard Screening Preferences")
+            ob_work_auth = st.selectbox("Authorized to work in target country?", ["Yes", "No"])
+            ob_sponsorship = st.selectbox("Require Visa Sponsorship now or in the future?", ["No", "Yes"])
+            ob_salary = st.text_input("Desired Salary Expectations", placeholder="e.g. $95,000 - $115,000")
+            ob_notice = st.text_input("Earliest Start Date / Notice Period", value="2 weeks notice")
+
+        if extracted_resume_preview:
+            with st.expander("📄 Preview Extracted Resume Text", expanded=False):
+                st.text_area("Extracted from your resume:", value=extracted_resume_preview, height=150)
+
+        btn_col1, btn_col2, btn_col3 = st.columns([2, 2, 1])
+        with btn_col1:
+            if st.button("🚀 Save Profile & Finish Onboarding", type="primary"):
+                chosen_name = ob_name.strip() or (ob_full_name.strip().split(" ")[0] if ob_full_name.strip() else "Friend")
+                gadgets_cfg["user_name"] = chosen_name
+                gadgets_cfg["onboarding_complete"] = True
+                save_gadgets_config(gadgets_cfg)
+
+                compiled_profile = f"""# Candidate Information
+- Preferred Name: {chosen_name}
+- Full Name: {ob_full_name.strip() or chosen_name}
+- Email: {ob_email.strip()}
+- Phone: {ob_phone.strip()}
+- Location: {ob_location.strip()}
+- LinkedIn: {ob_linkedin.strip()}
+
+# Work Authorization & Demographics
+- Authorized to work in the country of application: {ob_work_auth}
+- Requires Visa Sponsorship now or in the future: {ob_sponsorship}
+- Desired Salary Range: {ob_salary.strip()}
+- Earliest Start Date / Notice Period: {ob_notice.strip()}
+- Gender / Ethnicity / Veteran / Disability: Prefer not to say
+
+# Extracted Resume Content & Work History
+{extracted_resume_preview if extracted_resume_preview else "Paste your work history or upload a PDF/Word resume in the Gadgets tab."}
+
+# Standard Screening Answers
+- "Why do you want to work here?": Write a concise 2-3 sentence answer connecting my background and resume experience to the specific role description on the page.
+"""
+                PROFILE_PATH.write_text(compiled_profile, encoding="utf-8")
+                st.session_state.show_onboarding = False
+                st.success(f"Welcome aboard, {chosen_name}! Your Master Profile (`profile.md`) is ready.")
+                st.rerun()
+
+        with btn_col2:
+            if st.button("🪄 Auto-Polish Profile with Sonnet 5.5"):
+                if not extracted_resume_preview:
+                    st.warning("Upload a PDF or Word resume first so Sonnet 5.5 can structure it!")
+                else:
+                    with st.spinner("Sonnet 5.5 is structuring your resume & answers into profile.md..."):
+                        chosen_name = ob_name.strip() or "Friend"
+                        gadgets_cfg["user_name"] = chosen_name
+                        gadgets_cfg["onboarding_complete"] = True
+                        save_gadgets_config(gadgets_cfg)
+                        polish_prompt = (
+                            f"Create a clean, comprehensive markdown file at {PROFILE_PATH} for job applications. "
+                            f"Include Candidate Info (Name: {ob_full_name or chosen_name}, Email: {ob_email}, Phone: {ob_phone}, "
+                            f"Location: {ob_location}, LinkedIn: {ob_linkedin}), Work Auth ({ob_work_auth}, Sponsorship: {ob_sponsorship}, "
+                            f"Salary: {ob_salary}, Notice: {ob_notice}), and organize this raw resume text into clean Work History, "
+                            f"Skills, and Education sections:\n\n{extracted_resume_preview}"
+                        )
+                        subprocess.run(
+                            [
+                                CLAUDE_BIN,
+                                "--model", active_model,
+                                "-p", polish_prompt,
+                                "--allowedTools", "Read,Write"
+                            ],
+                            cwd=str(BASE_DIR),
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace"
+                        )
+                        st.session_state.show_onboarding = False
+                        st.rerun()
+
+        with btn_col3:
+            if st.button("Skip for Now"):
+                gadgets_cfg["onboarding_complete"] = True
+                save_gadgets_config(gadgets_cfg)
+                st.session_state.show_onboarding = False
+                st.rerun()
+
+# =========================================================
+# MAIN 4-TAB INTERFACE (1:1 MAC & WINDOWS PARITY)
+# =========================================================
 tab_autonome, tab_tracker, tab_gadgets, tab_profile = st.tabs([
-    "🤖 Autonome (Auto-Filler)",
+    "🤖 Autonome (Sonnet 5.5 Filler)",
     f"📊 Application Tracker ({len(tracker_df)})",
-    "🧰 Gadgets Hub (PDF · Notion · Trello)",
+    "🧰 Gadgets Hub (PDF/Word · Notion)",
     "👤 Master Profile"
 ])
 
 # ==========================================
-# TAB 1: AUTONOME (CORE FILL & HOLD ENGINE)
+# TAB 1: AUTONOME (SONNET 5.5 FILL & HOLD)
 # ==========================================
 with tab_autonome:
-    st.subheader("🤖 Autonome: Batch Fill & Hold")
+    st.subheader("🤖 Autonome: Batch Fill & Hold (Powered by Sonnet 5.5)")
     st.markdown(
-        "Paste job links below. **Autonome** will launch your persistent Chrome browser, fill out the fields using your Master Profile & PDF Gadget, "
-        "automatically log the Company and Role to your **Application Tracker**, and leave every tab open right before the final Submit button."
+        "Paste job links below. **Autonome** uses **Claude Sonnet 5.5** (`--model " + active_model + "`) to conserve your compute power while "
+        "filling out forms in Chrome, uploading your `.pdf` or `.docx` resume, logging the Company & Role to your **Tracker**, and stopping before Submit."
     )
 
     urls_input = st.text_area(
@@ -208,13 +409,14 @@ with tab_autonome:
         placeholder="https://boards.greenhouse.io/...\nhttps://jobs.lever.co/..."
     )
 
-    if st.button("▶️ Launch Autonome Queue", type="primary"):
+    if st.button("▶️ Launch Autonome Queue (Sonnet 5.5)", type="primary"):
         urls = [u.strip() for u in urls_input.split("\n") if u.strip()]
         if not urls:
             st.warning("Please paste at least one job URL.")
         else:
+            resume_to_use = get_active_resume_path() or RESUME_PDF_PATH
             for i, url in enumerate(urls, 1):
-                with st.status(f"({i}/{len(urls)}) Autonome processing: {url}", expanded=True) as status:
+                with st.status(f"({i}/{len(urls)}) Sonnet 5.5 processing: {url}", expanded=True) as status:
                     log_box = st.empty()
                     logs = ""
 
@@ -228,7 +430,7 @@ with tab_autonome:
                     prompt = (
                         f"Read {PROFILE_PATH}. Using the Playwright MCP browser, open a NEW tab and navigate to {url}. "
                         f"If there is an 'Apply' button, click it to reach the application form. "
-                        f"Fill out all form fields accurately using {PROFILE_PATH} and upload the resume from {RESUME_PATH}. "
+                        f"Fill out all form fields accurately using {PROFILE_PATH} and upload the resume file from {resume_to_use}. "
                         f"{cover_letter_instruction}"
                         f"STRICT RULES: "
                         f"1. NEVER click the final 'Submit' button. "
@@ -240,13 +442,17 @@ with tab_autonome:
 
                     process = subprocess.Popen(
                         [
-                            "claude", "-p", prompt,
+                            CLAUDE_BIN,
+                            "--model", active_model,
+                            "-p", prompt,
                             "--allowedTools", "mcp__playwright__*,Read,Write"
                         ],
                         cwd=str(BASE_DIR),
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
-                        text=True
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace"
                     )
 
                     for line in process.stdout:
@@ -255,10 +461,9 @@ with tab_autonome:
 
                     process.wait()
 
-                    # Parse extracted Company, Role, and Notes from Claude's output
                     detected_company = "Unknown Company"
                     detected_role = "Job Application"
-                    detected_notes = "Filled by Autonome — check open Chrome tab to submit."
+                    detected_notes = "Filled by Autonome (Sonnet 5.5) — check open Chrome tab to submit."
                     meta_match = re.search(
                         r"TRACKER_META:\s*Company=([^|\n]+)\|\s*Role=([^|\n]+)\|\s*Notes=([^\n]+)",
                         logs
@@ -268,7 +473,6 @@ with tab_autonome:
                         detected_role = meta_match.group(2).strip()
                         detected_notes = meta_match.group(3).strip()
 
-                    # Save to local Application Tracker
                     append_application_to_tracker(
                         company=detected_company,
                         role=detected_role,
@@ -277,10 +481,6 @@ with tab_autonome:
                         notes=detected_notes
                     )
 
-                    # Trigger enabled Gadgets automatically
-                    if gadgets_cfg.get("trello_enabled"):
-                        ok, msg = push_to_trello(gadgets_cfg, detected_company, detected_role, url, "Ready to Review")
-                        st.caption(f"📋 Trello Gadget: {msg}")
                     if gadgets_cfg.get("notion_enabled"):
                         ok, msg = push_to_notion(gadgets_cfg, detected_company, detected_role, url, "Ready to Review")
                         st.caption(f"📓 Notion Gadget: {msg}")
@@ -299,7 +499,6 @@ with tab_tracker:
 
     df_current = load_tracker_df()
 
-    # Top KPI Dashboard Row
     kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
     kpi1.metric("🗂️ Total Jobs", len(df_current))
     kpi2.metric("⏳ Ready to Review", len(df_current[df_current["Status"] == "Ready to Review"]))
@@ -309,7 +508,6 @@ with tab_tracker:
 
     st.divider()
 
-    # Add Manual Entry Expander
     with st.expander("➕ Log a Job Application Manually"):
         m_col1, m_col2, m_col3 = st.columns(3)
         with m_col1:
@@ -335,7 +533,6 @@ with tab_tracker:
                 st.success("Added application to tracker!")
                 st.rerun()
 
-    # Search and Filter Controls
     f_col1, f_col2, f_col3 = st.columns([2, 2, 1])
     with f_col1:
         search_query = st.text_input("🔍 Filter by Company, Role, or Notes:", placeholder="Type to search...")
@@ -350,7 +547,6 @@ with tab_tracker:
             st.toast("Updated all Ready to Review items to Applied!")
             st.rerun()
 
-    # Apply view filters
     filtered_df = df_current.copy()
     if search_query.strip():
         q = search_query.strip().lower()
@@ -363,7 +559,6 @@ with tab_tracker:
     if status_filter:
         filtered_df = filtered_df[filtered_df["Status"].isin(status_filter)]
 
-    # Interactive Editable Table
     edited_df = st.data_editor(
         filtered_df,
         use_container_width=True,
@@ -391,7 +586,6 @@ with tab_tracker:
             if not search_query.strip() and not status_filter:
                 save_tracker_df(edited_df)
             else:
-                # Merge edits back into full dataframe by matching URL + Date
                 full_df = load_tracker_df()
                 full_df.update(edited_df)
                 save_tracker_df(full_df)
@@ -406,31 +600,36 @@ with tab_tracker:
         )
 
 # ==========================================
-# TAB 3: DEDICATED GADGETS HUB
+# TAB 3: DEDICATED GADGETS HUB (PDF/WORD + NOTION)
 # ==========================================
 with tab_gadgets:
     st.subheader("🧰 Modular Gadgets Hub")
-    st.caption("Configure and run your standalone or integrated Gadgets for PDFs, Notion, and Trello.")
+    st.caption("Configure and run your standalone or integrated Gadgets for PDF/Word Resumes and Notion.")
 
-    g_col1, g_col2, g_col3 = st.columns(3)
+    g_col1, g_col2 = st.columns(2)
 
-    # --- PDF GADGET ---
     with g_col1:
         with st.container(border=True):
-            st.markdown("### 📄 PDF Gadget")
-            st.caption("Manage `resume.pdf` and tailored cover letters.")
+            st.markdown("### 📄 PDF & Word Resume Gadget")
+            st.caption("Manage `.pdf` or `.docx` resumes, extract text into `profile.md`, and generate cover letters with Sonnet 5.5.")
 
-            if RESUME_PATH.exists():
-                size_kb = round(RESUME_PATH.stat().st_size / 1024, 1)
-                st.success(f"Active `resume.pdf` ({size_kb} KB)")
-            else:
-                st.error("No `resume.pdf` found yet.")
+            if RESUME_PDF_PATH.exists():
+                size_kb = round(RESUME_PDF_PATH.stat().st_size / 1024, 1)
+                st.success(f"Active PDF: `resume.pdf` ({size_kb} KB)")
+            if RESUME_DOCX_PATH.exists():
+                size_kb = round(RESUME_DOCX_PATH.stat().st_size / 1024, 1)
+                st.success(f"Active Word Doc: `resume.docx` ({size_kb} KB)")
+            if not RESUME_PDF_PATH.exists() and not RESUME_DOCX_PATH.exists():
+                st.error("No `resume.pdf` or `resume.docx` found yet.")
 
-            uploaded_pdf = st.file_uploader("Upload or Replace `resume.pdf`", type=["pdf"])
-            if uploaded_pdf is not None:
-                RESUME_PATH.write_bytes(uploaded_pdf.read())
-                st.success("✅ Saved new `resume.pdf`!")
-                st.rerun()
+            uploaded_doc = st.file_uploader("Upload or Replace Resume (`.pdf` or `.docx`)", type=["pdf", "docx"])
+            if uploaded_doc is not None:
+                extracted_text = save_and_extract_resume(uploaded_doc)
+                st.success(f"✅ Saved `{uploaded_doc.name}` ({len(extracted_text)} chars extracted)!")
+                if st.button("📥 Append Extracted Resume Text to Master Profile"):
+                    current_prof = PROFILE_PATH.read_text(encoding="utf-8") if PROFILE_PATH.exists() else ""
+                    PROFILE_PATH.write_text(current_prof + "\n\n# Imported Resume Text\n" + extracted_text, encoding="utf-8")
+                    st.toast("Appended resume text into profile.md!")
 
             auto_cl = st.checkbox(
                 "Auto-generate tailored Cover Letter during Autonome runs",
@@ -439,29 +638,35 @@ with tab_gadgets:
             if auto_cl != gadgets_cfg.get("pdf_auto_cover_letter"):
                 gadgets_cfg["pdf_auto_cover_letter"] = auto_cl
                 save_gadgets_config(gadgets_cfg)
-                st.toast("Updated PDF Gadget preference!")
+                st.toast("Updated Resume Gadget preference!")
 
             st.divider()
-            st.markdown("**Quick Cover Letter Generator**")
+            st.markdown("**Quick Cover Letter Generator (Sonnet 5.5)**")
             jd_snippet = st.text_area("Paste Job Description or URL:", height=100, key="pdf_jd")
             if st.button("✨ Generate Cover Letter"):
                 if not jd_snippet.strip():
                     st.warning("Paste a job description or link first.")
                 else:
-                    with st.spinner("Claude is drafting your tailored cover letter..."):
+                    with st.spinner("Sonnet 5.5 is drafting your tailored cover letter..."):
                         cl_prompt = (
                             f"Read {PROFILE_PATH}. Draft a concise, high-impact cover letter tailored to this job: {jd_snippet}. "
                             f"Save the output to {COVER_LETTER_PATH} and print it."
                         )
                         res = subprocess.run(
-                            ["claude", "-p", cl_prompt, "--allowedTools", "Read,Write"],
+                            [
+                                CLAUDE_BIN,
+                                "--model", active_model,
+                                "-p", cl_prompt,
+                                "--allowedTools", "Read,Write"
+                            ],
                             cwd=str(BASE_DIR),
                             capture_output=True,
-                            text=True
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace"
                         )
                         st.code(res.stdout, language="markdown")
 
-    # --- NOTION GADGET ---
     with g_col2:
         with st.container(border=True):
             st.markdown("### 📓 Notion Gadget")
@@ -503,61 +708,21 @@ with tab_gadgets:
                 else:
                     st.error(msg)
 
-    # --- TRELLO GADGET ---
-    with g_col3:
-        with st.container(border=True):
-            st.markdown("### 📋 Trello Gadget")
-            st.caption("Auto-create Trello cards for every filled job link.")
-
-            trello_enabled = st.toggle("Enable Trello Sync", value=gadgets_cfg.get("trello_enabled", False))
-            trello_key = st.text_input(
-                "Trello API Key",
-                value=gadgets_cfg.get("trello_api_key", ""),
-                type="password"
-            )
-            trello_token = st.text_input(
-                "Trello Token",
-                value=gadgets_cfg.get("trello_token", ""),
-                type="password"
-            )
-            trello_list = st.text_input(
-                "Trello Target List ID",
-                value=gadgets_cfg.get("trello_list_id", ""),
-                help="Cards will be added to this column whenever Autonome prepares an application."
-            )
-
-            if st.button("💾 Save Trello Gadget"):
-                gadgets_cfg["trello_enabled"] = trello_enabled
-                gadgets_cfg["trello_api_key"] = trello_key.strip()
-                gadgets_cfg["trello_token"] = trello_token.strip()
-                gadgets_cfg["trello_list_id"] = trello_list.strip()
-                save_gadgets_config(gadgets_cfg)
-                st.success("Trello Gadget settings saved!")
-
-            if st.button("🧪 Test Trello Connection"):
-                ok, msg = push_to_trello(
-                    {
-                        "trello_enabled": True,
-                        "trello_api_key": trello_key.strip(),
-                        "trello_token": trello_token.strip(),
-                        "trello_list_id": trello_list.strip()
-                    },
-                    "Acme Corp",
-                    "Sample Role",
-                    "https://example.com/test-job",
-                    "Gadget Connection Test"
-                )
-                if ok:
-                    st.success(msg)
-                else:
-                    st.error(msg)
-
 # ==========================================
 # TAB 4: MASTER PROFILE EDITOR
 # ==========================================
 with tab_profile:
     st.subheader("👤 Your Master Profile (`profile.md`)")
-    st.caption("Autonome and the PDF Gadget read this file to answer application questions accurately.")
+    st.caption("Autonome and the PDF/Word Gadget read this file to answer application questions accurately.")
+    col_p1, col_p2 = st.columns([3, 1])
+    with col_p2:
+        new_pref_name = st.text_input("Your Greeting Name:", value=gadgets_cfg.get("user_name", ""))
+        if st.button("💬 Update Greeting Name"):
+            gadgets_cfg["user_name"] = new_pref_name.strip()
+            save_gadgets_config(gadgets_cfg)
+            st.toast("Greeting name updated!")
+            st.rerun()
+
     profile_text = PROFILE_PATH.read_text(encoding="utf-8") if PROFILE_PATH.exists() else ""
     updated_profile = st.text_area("Edit your details & standard answers:", value=profile_text, height=450)
     if st.button("💾 Save Master Profile"):

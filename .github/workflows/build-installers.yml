@@ -1,4 +1,4 @@
-name: Build macOS PKG Installer
+name: Build Mac (.pkg) & Windows (.exe) Installers
 
 on:
   workflow_dispatch:
@@ -9,13 +9,13 @@ permissions:
   contents: write
 
 jobs:
-  build-pkg:
+  build-mac-pkg:
     runs-on: macos-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Inject Repository URL for Auto-Updater
+      - name: Inject Repository URL into Mac Launcher
         run: |
           sed -i '' "s|https://github.com/YOUR_GITHUB_USERNAME/mac-job-filler.git|https://github.com/${{ github.repository }}.git|g" launcher.sh
 
@@ -42,7 +42,7 @@ jobs:
               <key>CFBundlePackageType</key>
               <string>APPL</string>
               <key>CFBundleShortVersionString</key>
-              <string>1.0</string>
+              <string>1.1</string>
           </dict>
           </plist>
           EOF
@@ -81,21 +81,59 @@ jobs:
           pkgbuild --root ./pkg_root \
                    --scripts ./scripts \
                    --identifier com.opensource.jobfiller \
-                   --version 1.0.${{ github.run_number }} \
+                   --version 1.1.${{ github.run_number }} \
                    --install-location / \
                    JobFiller.pkg
 
-      - name: Upload PKG Artifact
+      - name: Upload Mac PKG Artifact
         uses: actions/upload-artifact@v4
         with:
           name: JobFiller-Mac-Installer
           path: JobFiller.pkg
 
-      - name: Publish to GitHub Releases
+  build-windows-exe:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Inject Repository URL into Windows Launcher
+        shell: pwsh
+        run: |
+          (Get-Content launcher.bat) -replace 'https://github.com/YOUR_GITHUB_USERNAME/mac-job-filler.git', "https://github.com/${{ github.repository }}.git" | Set-Content launcher.bat
+
+      - name: Compile JobFiller-Setup.exe with Inno Setup
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+
+      - name: Upload Windows EXE Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: JobFiller-Windows-Installer
+          path: Output/JobFiller-Setup.exe
+
+  release:
+    needs: [build-mac-pkg, build-windows-exe]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All Built Installers
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Publish Both Installers to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: "Latest macOS Installer (Autonome + Tracker + Gadgets Hub)"
-          body: "Download **JobFiller.pkg** below. Right-click `JobFiller.pkg` -> click **Open** to install on macOS."
-          files: JobFiller.pkg
+          name: "Latest Release — macOS (.pkg) & Windows (.exe)"
+          body: |
+            ### 🍎 For macOS Users (1:1 Parity)
+            Download **`JobFiller.pkg`** below, right-click `JobFiller.pkg` -> click **Open** to install.
+
+            ### 🪟 For Windows Users (1:1 Parity)
+            Download **`JobFiller-Setup.exe`** below and run the installer to place **Autonome Job Filler** on your Desktop.
+          files: |
+            dist/JobFiller-Mac-Installer/JobFiller.pkg
+            dist/JobFiller-Windows-Installer/JobFiller-Setup.exe
           prerelease: false
