@@ -121,6 +121,14 @@ jobs:
     needs: [build-mac-pkg, build-windows-exe]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Move the 'latest' tag to this commit
+        run: |
+          git tag -f latest "${{ github.sha }}"
+          git push -f origin latest
+
       - name: Download All Built Installers
         uses: actions/download-artifact@v4
         with:
@@ -130,13 +138,31 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: "Latest Release — macOS (.pkg) & Windows (.exe)"
+          name: "Job Hunter 2.1 — Claude or ChatGPT, macOS & Windows"
           body: |
-            ### 🍎 For macOS Users (1:1 Parity)
-            Download **`JobFiller.pkg`** below, right-click `JobFiller.pkg` -> click **Open** to install.
+            Your own job-search assistant, powered by **your Claude or ChatGPT account**, running only on your computer.
 
-            ### 🪟 For Windows Users (1:1 Parity)
-            Download **`JobFiller-Setup.exe`** below and run the installer to place **Job Hunter** on your Desktop.
+            ## ⬇️ Install
+            - **🍎 Mac:** download **`JobFiller.pkg`** below → right-click it → **Open** (macOS asks once because it isn't from the App Store).
+            - **🪟 Windows:** download **`JobFiller-Setup.exe`** below → run it. If SmartScreen appears, click **More info → Run anyway**.
+
+            Then open **Job Hunter** from your Desktop. It installs what it needs and opens in your browser at `http://localhost:8501`.
+
+            ## 🚀 First run (about 5 minutes)
+            1. **Choose your AI:** Claude (Pro or Max plan) or ChatGPT (any plan, including Free).
+            2. Click **Install**, then **Sign in**. Your browser opens; sign in and come back. If your plan can't be used, Job Hunter tells you why and what to do.
+            3. Add your details and resume, then fill in **Profile → Don't claim** so your AI never says you've used a tool you haven't.
+
+            ## ✨ What's in this release
+            - 🔀 **Claude or ChatGPT:** pick at setup, switch from the sidebar any time. Every feature works on both.
+            - 📊 **Tracker first:** pipeline summary, follow-up reminders, contacts, search, and edits that save automatically.
+            - 🤖 **Auto-Apply:** fills applications in Chrome from your profile and **stops before Submit**.
+            - ✉️ **Cover letters (Word download), LinkedIn messages and fit checks**, in your voice, using only what's true.
+            - 💬 **Ask AI:** a job-search coach that knows your background.
+            - 📈 **Usage:** plan limits (5-hour and weekly) and tokens per request.
+            - 🔒 **Locked down:** localhost only, no shell or code tools for the AI, job ads treated as untrusted text.
+
+            Already installed? Just reopen Job Hunter. It updates itself.
           files: |
             dist/JobFiller-Mac-Installer/JobFiller.pkg
             dist/JobFiller-Windows-Installer/JobFiller-Setup.exe
