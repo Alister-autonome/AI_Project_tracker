@@ -1,23 +1,32 @@
-# Candidate Information
-- Full Name: Alex Rivera
+# Candidate
+- Full name: Alex Rivera
 - Email: alex@example.com
-- Phone: 555-123-4567
-- Location: Austin, TX (Willing to relocate: No, Remote/Hybrid preferred)
-- LinkedIn: https://linkedin.com/in/alexrivera
-- Portfolio / GitHub: https://github.com/alexrivera
+- Phone: 0400 000 000
+- Location: Melbourne, VIC (hybrid or remote preferred)
+- LinkedIn / portfolio: https://linkedin.com/in/alexrivera
 
-# Work Authorization & Demographics
-- Authorized to work in the country of application: Yes
-- Requires Visa Sponsorship now or in the future: No
-- Desired Salary Range: $95,000 - $115,000
-- Earliest Start Date / Notice Period: 2 weeks notice
-- Gender / Ethnicity / Veteran / Disability: Prefer not to say
+# Positioning (one line that leads every application)
+I turn messy marketing data into campaigns that pay for themselves, and I want to do it at a bigger scale.
 
-# Work History Summary
-- Current Role: Marketing Coordinator at Acme Corp (Jan 2023 - Present)
-- Previous Role: Junior Associate at Beta LLC (Jun 2021 - Dec 2022)
-- Education: B.A. in Communications, State University (Graduated May 2021)
+# Work rights & preferences
+- Allowed to work in target country: Yes (citizen)
+- Needs visa sponsorship: No
+- Salary expectation: $95,000 - $115,000 + super
+- Notice period: 2 weeks
+- Roles I want: Marketing Operations, Growth, Campaign Analytics
+- Roles or companies I'd rather avoid: commission-only sales, agencies
 
-# Standard Screening Answers
-- "Why do you want to work here?": Write a concise 2-3 sentence answer connecting my background in campaign management and analytics to the specific role description on the page.
-- "Tell us about a challenge you solved": Use my experience streamlining cross-team reporting at Acme Corp.
+# Proof links (portfolio, case studies, articles)
+- Case study: https://example.com/case-study
+
+# Don't claim (skills/tools I haven't used, so they never get claimed)
+- Salesforce Marketing Cloud
+- SQL beyond basic queries
+
+# Referees (only share when asked)
+- Jordan Lee, Marketing Manager, Acme Corp (my direct manager), 0400 111 222, jordan@example.com
+
+# Resume
+- Marketing Coordinator, Acme Corp (Jan 2023 - Present): ran 40+ campaigns, cut reporting time 60% by automating dashboards.
+- Junior Associate, Beta LLC (Jun 2021 - Dec 2022)
+- B.A. Communications, State University (2021)

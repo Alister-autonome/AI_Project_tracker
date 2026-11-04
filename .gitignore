@@ -1,13 +1,18 @@
+# Personal files: never committed, never overwritten by updates
 profile.md
 resume.pdf
 resume.docx
-cover_letter.pdf
 cover_letter.md
+cover_letter.pdf
 user_config.json
 gadgets_config.json
 applications_history.csv
-venv/
+usage_log.csv
 chrome-profile/
+venv/
+.venv/
+
+# Build output
 pkg_root/
 Output/
 *.pkg

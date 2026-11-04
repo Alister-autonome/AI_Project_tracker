@@ -1,17 +1,17 @@
 @echo off
 setlocal EnableDelayedExpansion
 chcp 65001 >nul 2>&1
-title Autonome Job Filler (Windows)
+title Job Hunter
 
 cd /d "%~dp0"
 set "TARGET_DIR=%CD%"
 set "REPO_URL=https://github.com/YOUR_GITHUB_USERNAME/mac-job-filler.git"
 
 :: Add standard Windows install locations to PATH immediately
-set "PATH=%LOCALAPPDATA%\Programs\Python\Python314;%LOCALAPPDATA%\Programs\Python\Python313;%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;%LOCALAPPDATA%\Programs\Python\Python311;%LOCALAPPDATA%\Programs\Python\Python311\Scripts;%LOCALAPPDATA%\Python\pythoncore-3.14-64;C:\Program Files\Python312;C:\Program Files\Python312\Scripts;C:\Program Files\nodejs;%APPDATA%\npm;%PATH%"
+set "PATH=%USERPROFILE%\.local\bin;%LOCALAPPDATA%\Programs\Python\Python314;%LOCALAPPDATA%\Programs\Python\Python313;%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;%LOCALAPPDATA%\Programs\Python\Python311;%LOCALAPPDATA%\Programs\Python\Python311\Scripts;%LOCALAPPDATA%\Python\pythoncore-3.14-64;C:\Program Files\Python312;C:\Program Files\Python312\Scripts;C:\Program Files\nodejs;%APPDATA%\npm;%PATH%"
 
 echo ==========================================
-echo    Autonome Job Filler -- Checking Updates
+echo    Job Hunter -- Checking for updates
 echo ==========================================
 
 :: 1. Self-Update from GitHub on Boot (Preserves untracked personal files)
@@ -80,18 +80,25 @@ if "!PYTHON_CMD!"=="" (
     )
 )
 
-:: 5. Install Claude Code CLI if missing
+:: 5. Install Claude Code CLI if missing (official installer, npm as fallback)
 call claude --version >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
-    echo [Setup] Installing Claude Code CLI...
-    call npm install -g @anthropic-ai/claude-code
+    echo [Setup] Installing Claude Code...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://claude.ai/install.ps1 | iex"
+    set "PATH=%USERPROFILE%\.local\bin;%PATH%"
+    call claude --version >nul 2>&1 || call npm install -g @anthropic-ai/claude-code
 )
 
-:: 6. Register Playwright MCP on Windows (using cmd /c npx wrapper required on Windows)
-call claude mcp list 2>nul | findstr /I "playwright" >nul
-if %ERRORLEVEL% NEQ 0 (
-    echo [Setup] Configuring Playwright Chrome Browser Bridge for Windows...
-    call claude mcp add playwright -s user -- cmd /c npx -y @playwright/mcp@latest --browser chrome --user-data-dir "%TARGET_DIR%\chrome-profile"
+:: 6. Connect the Claude account once (opens the browser to sign in)
+call claude auth status 2>nul | findstr /R /C:"loggedIn.: true" >nul
+if !ERRORLEVEL! NEQ 0 (
+    echo.
+    echo ==========================================
+    echo  One-time step: connect your Claude account
+    echo  A browser window will open. Sign in with your Claude Pro or Max account,
+    echo  then come back here.
+    echo ==========================================
+    call claude auth login
 )
 
 :: 7. Build Python venv using real Python binary and launch Streamlit directly from venv
@@ -107,13 +114,10 @@ if not exist "venv\Scripts\python.exe" (
     exit /b 1
 )
 
-echo [Setup] Verifying Python packages (streamlit, pandas, pypdf, python-docx)...
+echo [Setup] Verifying Python packages (streamlit, pandas, pypdf, python-docx)
 "%TARGET_DIR%\venv\Scripts\python.exe" -m pip install -q --upgrade pip streamlit pandas pypdf python-docx
 
 echo.
-echo [FIRST TIME TIP] If applications fail to start, open a new Command Prompt,
-echo type 'claude', and then type '/login' once to link your Claude Pro account.
-echo.
-
-"%TARGET_DIR%\venv\Scripts\python.exe" -m streamlit run app.py
+echo Opening Job Hunter at http://localhost:8501 - only this computer can see it.
+"%TARGET_DIR%\venv\Scripts\python.exe" -m streamlit run app.py --server.address 127.0.0.1 --browser.gatherUsageStats false
 pause

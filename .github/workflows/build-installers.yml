@@ -26,6 +26,8 @@ jobs:
           mkdir -p scripts
 
           cp profile.example.md app.py launcher.sh README.md pkg_root/Users/Shared/JobFiller/
+          mkdir -p pkg_root/Users/Shared/JobFiller/.streamlit
+          cp .streamlit/config.toml pkg_root/Users/Shared/JobFiller/.streamlit/
           chmod +x pkg_root/Users/Shared/JobFiller/launcher.sh
 
           cat << 'EOF' > "pkg_root/Applications/Job Filler.app/Contents/Info.plist"
@@ -38,11 +40,11 @@ jobs:
               <key>CFBundleIdentifier</key>
               <string>com.opensource.jobfiller</string>
               <key>CFBundleName</key>
-              <string>Job Filler</string>
+              <string>Job Hunter</string>
               <key>CFBundlePackageType</key>
               <string>APPL</string>
               <key>CFBundleShortVersionString</key>
-              <string>1.1</string>
+              <string>2.0</string>
           </dict>
           </plist>
           EOF
@@ -66,6 +68,8 @@ jobs:
           cp -f /Users/Shared/JobFiller/app.py "$TARGET_DIR/"
           cp -f /Users/Shared/JobFiller/launcher.sh "$TARGET_DIR/"
           cp -f /Users/Shared/JobFiller/README.md "$TARGET_DIR/"
+          mkdir -p "$TARGET_DIR/.streamlit"
+          cp -f /Users/Shared/JobFiller/.streamlit/config.toml "$TARGET_DIR/.streamlit/"
 
           chmod +x "$TARGET_DIR/launcher.sh"
           chown -R "$CURRENT_USER":staff "$TARGET_DIR"
@@ -81,7 +85,7 @@ jobs:
           pkgbuild --root ./pkg_root \
                    --scripts ./scripts \
                    --identifier com.opensource.jobfiller \
-                   --version 1.1.${{ github.run_number }} \
+                   --version 2.0.${{ github.run_number }} \
                    --install-location / \
                    JobFiller.pkg
 
@@ -132,7 +136,7 @@ jobs:
             Download **`JobFiller.pkg`** below, right-click `JobFiller.pkg` -> click **Open** to install.
 
             ### 🪟 For Windows Users (1:1 Parity)
-            Download **`JobFiller-Setup.exe`** below and run the installer to place **Autonome Job Filler** on your Desktop.
+            Download **`JobFiller-Setup.exe`** below and run the installer to place **Job Hunter** on your Desktop.
           files: |
             dist/JobFiller-Mac-Installer/JobFiller.pkg
             dist/JobFiller-Windows-Installer/JobFiller-Setup.exe

@@ -1,0 +1,25 @@
+# Job Hunter only listens on this computer. Nobody else on your Wi-Fi can open it.
+[server]
+address = "127.0.0.1"
+port = 8501
+headless = false
+enableXsrfProtection = true
+enableCORS = true
+maxUploadSize = 10
+runOnSave = false
+
+[browser]
+serverAddress = "localhost"
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = "none"
+
+[theme]
+base = "light"
+primaryColor = "#4f46e5"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f5f6fb"
+textColor = "#1f2333"
+font = "sans serif"

@@ -4,10 +4,10 @@ REPO_URL="https://github.com/YOUR_GITHUB_USERNAME/mac-job-filler.git"
 
 mkdir -p "$TARGET_DIR"
 cd "$TARGET_DIR" || exit 1
-export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.npm-global/bin:$PATH"
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.npm-global/bin:$PATH"
 
 echo "=========================================="
-echo "   Autonome Job Filler -- Checking Updates"
+echo "   Job Hunter -- Checking for updates"
 echo "=========================================="
 
 if command -v git &> /dev/null; then
@@ -47,13 +47,19 @@ if ! command -v node &> /dev/null || ! command -v python3 &> /dev/null; then
 fi
 
 if ! command -v claude &> /dev/null; then
-    echo "Installing Claude Code CLI..."
-    npm install -g @anthropic-ai/claude-code
+    echo "Installing Claude Code..."
+    curl -fsSL https://claude.ai/install.sh | bash || npm install -g @anthropic-ai/claude-code
+    export PATH="$HOME/.local/bin:$PATH"
 fi
 
-if ! claude mcp list 2>/dev/null | grep -q "playwright"; then
-    echo "Configuring Playwright Chrome Browser Bridge..."
-    claude mcp add playwright -s user -- npx -y @playwright/mcp@latest --browser chrome --user-data-dir "$TARGET_DIR/chrome-profile"
+if ! claude auth status 2>/dev/null | grep -q '"loggedIn": true'; then
+    echo ""
+    echo "=========================================="
+    echo " 🔑 One-time step: connect your Claude account"
+    echo " A browser window will open. Sign in with your Claude Pro or Max account,"
+    echo " then come back here."
+    echo "=========================================="
+    claude auth login
 fi
 
 if [ ! -d "venv" ]; then
@@ -67,8 +73,5 @@ else
 fi
 
 echo ""
-echo "💡 FIRST TIME TIP: If applications fail to start, open a new Terminal tab,"
-echo "   type 'claude', and then type '/login' once to link your Claude Pro account."
-echo ""
-
-streamlit run app.py
+echo "Opening Job Hunter at http://localhost:8501 (only this computer can see it)"
+streamlit run app.py --server.address 127.0.0.1 --browser.gatherUsageStats false
