@@ -1,0 +1,101 @@
+name: Build macOS PKG Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  build-pkg:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Inject Repository URL for Auto-Updater
+        run: |
+          sed -i '' "s|https://github.com/YOUR_GITHUB_USERNAME/mac-job-filler.git|https://github.com/${{ github.repository }}.git|g" launcher.sh
+
+      - name: Stage Package Payload & macOS App Bundle
+        run: |
+          mkdir -p pkg_root/Users/Shared/JobFiller
+          mkdir -p "pkg_root/Applications/Job Filler.app/Contents/MacOS"
+          mkdir -p scripts
+
+          cp profile.example.md app.py launcher.sh README.md pkg_root/Users/Shared/JobFiller/
+          chmod +x pkg_root/Users/Shared/JobFiller/launcher.sh
+
+          cat << 'EOF' > "pkg_root/Applications/Job Filler.app/Contents/Info.plist"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>JobFiller</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.opensource.jobfiller</string>
+              <key>CFBundleName</key>
+              <string>Job Filler</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+          </dict>
+          </plist>
+          EOF
+
+          cat << 'EOF' > "pkg_root/Applications/Job Filler.app/Contents/MacOS/JobFiller"
+          #!/bin/bash
+          osascript -e 'tell application "Terminal" to activate' -e 'tell application "Terminal" to do script "bash \"$HOME/Desktop/JobFiller/launcher.sh\""'
+          EOF
+          chmod +x "pkg_root/Applications/Job Filler.app/Contents/MacOS/JobFiller"
+
+          cat << 'EOF' > scripts/postinstall
+          #!/bin/bash
+          CURRENT_USER=$(stat -f "%Su" /dev/console)
+          TARGET_DIR="/Users/$CURRENT_USER/Desktop/JobFiller"
+          mkdir -p "$TARGET_DIR"
+
+          cp -f /Users/Shared/JobFiller/profile.example.md "$TARGET_DIR/"
+          if [ ! -f "$TARGET_DIR/profile.md" ]; then
+              cp /Users/Shared/JobFiller/profile.example.md "$TARGET_DIR/profile.md"
+          fi
+          cp -f /Users/Shared/JobFiller/app.py "$TARGET_DIR/"
+          cp -f /Users/Shared/JobFiller/launcher.sh "$TARGET_DIR/"
+          cp -f /Users/Shared/JobFiller/README.md "$TARGET_DIR/"
+
+          chmod +x "$TARGET_DIR/launcher.sh"
+          chown -R "$CURRENT_USER":staff "$TARGET_DIR"
+          chown -R "$CURRENT_USER":staff "/Applications/Job Filler.app"
+          xattr -cr "$TARGET_DIR" "/Applications/Job Filler.app" 2>/dev/null || true
+          ln -sf "/Applications/Job Filler.app" "/Users/$CURRENT_USER/Desktop/Job Filler.app"
+          chown -h "$CURRENT_USER":staff "/Users/$CURRENT_USER/Desktop/Job Filler.app"
+          EOF
+          chmod +x scripts/postinstall
+
+      - name: Compile JobFiller.pkg
+        run: |
+          pkgbuild --root ./pkg_root \
+                   --scripts ./scripts \
+                   --identifier com.opensource.jobfiller \
+                   --version 1.0.${{ github.run_number }} \
+                   --install-location / \
+                   JobFiller.pkg
+
+      - name: Upload PKG Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: JobFiller-Mac-Installer
+          path: JobFiller.pkg
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Latest macOS Installer (Autonome + Tracker + Gadgets Hub)"
+          body: "Download **JobFiller.pkg** below. Right-click `JobFiller.pkg` -> click **Open** to install on macOS."
+          files: JobFiller.pkg
+          prerelease: false

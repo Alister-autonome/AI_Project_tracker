@@ -1,0 +1,11 @@
+profile.md
+resume.pdf
+cover_letter.pdf
+gadgets_config.json
+applications_history.csv
+venv/
+chrome-profile/
+pkg_root/
+*.pkg
+.DS_Store
+__pycache__/
